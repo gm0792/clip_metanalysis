@@ -1,0 +1,3908 @@
+---
+title: "Clip mata-analysis R Notebook"
+output: html_notebook
+author: Giulia Manferrari
+date: 24.04.21
+---
+
+
+# CLIP META-ANALYISIS
+
+## DATA 
+
+Public available CLIP data targeting TDP-43 from the following studies: 
+Tollervey et al 2017: link to study / database code 
+Rot et al 2019
+
+
+### Libraries
+```{r LIBRARY, message=FALSE, warning=FALSE}
+library(dplyr)    
+library(ggplot2) 
+library(DESeq2)
+library(data.table)
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+library(reshape2)
+library(BiocManager)
+library(ggpubr)
+library(ggsci)
+library(RColorBrewer)
+library(plotly)
+library(ggplot2)
+library(tximport)
+library(GenomicRanges)
+library(rtracklayer)
+library(GenomicFeatures)
+library(readr)
+library(scales) 
+library(cowplot)
+```
+
+### Working directory 
+```{r}
+setwd("/Users/manferg/clip_metanalysis/")
+```
+
+### Functions
+```{r}
+reorder_within <- function(x, by, within, fun = mean, sep = "___", ...) {
+  new_x <- paste(x, within, sep = sep)
+  stats::reorder(new_x, by, FUN = fun)
+}
+
+scale_x_reordered <- function(..., sep = "___") {
+  reg <- paste0(sep, ".+$")
+  ggplot2::scale_x_discrete(labels = function(x) gsub(reg, "", x), ...)
+}
+```
+### Colour palettes
+```{r}
+mypal.dedup<-c("input_reads"= "#5FB1D4",  "output_reads"= "#39373B") 
+mypal.dedup.ratio<-c("ratio"= "#5FB1D4")
+my.pal.lib<-c("output_reads"= "#39373B")
+mypal.region<-c("intron" = "#454241","CDS" ="#F0421C", "intergenic" ="#DDD3D1", "ncRNA" = "#3DB75D", "UTR5" = "#3DB7E6", "UTR3"= "#D644C7")
+mypal.model<-c("FTLD-TDP_human_brain" = "#F21905","Healthy_human_brain" = "#49BF45","SH-SY5Y"="#9263A6","293Flp" ="#034C8C", "hES" ="#04ADBF")
+# old_mypal.biotype<-c( "mRNA" ="#202426", "lncRNA"="#BF4215","pre-mRNA"= "#9DA65D","snoRNA"="#8C623E", "miRNA" ="#8C8C88", "mt_rRNA" =  "#6C733D",  "snRNA" = "#7F7D8C", "mt_tRNA" = "#D9863D","NA" = "#FFFEFF","rRNA"="#D92B3A", "sRNA"="#8C5230",  "translated_unprocessed_pseudogene"  ="#A66D97", "miRNA" ="#224A59")
+                
+               
+show_col(mypal.biotype)  
+
+
+# mypal.biotype<-c("lncRNA"="#BF4215","mRNA" = "#003C30","pre-mRNA"= "#50846D",
+#                 "miRNA" ="#F6E8C3", "mt_rRNA" =  "#9DA65D", "mt_tRNA" = "#6C733D",
+#                 "snRNA" = "#543005","snoRNA"="#8C510A" ,"NA" = "#FFFEFF", "sRNA"="#BF812D",    "rRNA"="#224A59", "translated_unprocessed_pseudogene"  ="#A66D97")
+
+
+mypal.biotype<-c("lncRNA"="#BF4215","mRNA" = "#224A59","pre-mRNA"= "#80b1d3",
+                "miRNA" ="#fb8072", "mt_rRNA" =  "#9DA65D", "mt_tRNA" = "#ccebc5",
+                "snRNA" = "#D99543","snoRNA"="#BF812D" ,"NA" = "#FFFEFF", "sRNA"="#d9d9d9",    "rRNA"="#bc80bd", "translated_unprocessed_pseudogene"  ="#ffed6f")
+
+
+```
+
+### ordering index 
+```{r}
+
+reorder_sample_idx <- c("grot_293fl_1", "grot_293fl_2", "tollervey_brain1","tollervey_brain2","tollervey_brain6.high","tollervey_brain7.low","tollervey_brain3","tollervey_brain4","tollervey_brain5","tollervey_ESC","tollervey_SHSY5Y1a.high","tollervey_SHSY5Y1b.low","tollervey_SHSY5Y2","tollervey_SHSY5Y3","tollervey_SHSY5Y_cyt","tollervey_SHSY5Y_nucl")
+
+```
+
+
+
+
+
+### DEDUPLICATION 
+
+Retrieve Tollervey and Rot data set reads in/out from deduplication .log files 
+```{r message=FALSE, include=FALSE}
+#import dedup.log Tollervey et al data--------------------
+
+tollervey.dedup.li = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/tollervey/data/run/results/dedup", pattern = ".log$", full.names = TRUE) #store file paths for each file in a list
+tollervey.fi.li.names = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/tollervey/data/run/results/dedup", pattern = ".log$", full.names = FALSE) %>%
+  gsub(".log","",.)  #extracts files names in a seprate list
+tollervey.dedup.list = list() #create empty list
+for (i in 1:length(tollervey.dedup.li)){
+  temp = read_delim(tollervey.dedup.li[[i]],"\t", escape_double = FALSE, trim_ws = TRUE)
+  tollervey.dedup.list[[i]] = temp
+
+}
+#import dedup.log G.Rot et al data--------------------
+#path to Nobby's run 
+#/camp/lab/luscomben/home/users/chakraa2/projects/giulia/results/dedup
+grot.dedup.li = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/grot/prova/run-imp/results/dedup", pattern = ".log$", full.names = TRUE) #store file paths for each file in a list
+grot.fi.li.names = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/grot/prova/run-imp/results/dedup", pattern = ".log$", full.names = FALSE) %>%
+  gsub(".log","",.)  #extracts files names in a seprate list
+grot.dedup.list = list() #create empty list
+for (i in 1:length(grot.dedup.li)){
+  temp = read_delim(grot.dedup.li[[i]],"\t", escape_double = FALSE, trim_ws = TRUE)
+  grot.dedup.list[[i]] = temp
+  
+}
+
+
+names(grot.dedup.list) <-grot.fi.li.names #assign samples name to list's elements
+
+#build dedup reast in/out/ratio dataset Tollervey et al----------
+tollervey.dedup.input.li = list() #list input reads
+tollervey.dedup.output.li = list() #list output reads
+for (i in 1:length(tollervey.dedup.list)){
+  tollervey.dedup.input.li[i]<-as.integer(sub(".*?Input Reads:.*?(\\d+).*", "\\1", tollervey.dedup.list[[i]]))
+  tollervey.dedup.output.li[i]<-as.integer(sub(".*?Number of reads out:.*?(\\d+).*", "\\1", tollervey.dedup.list[[i]]))
+}
+
+names(tollervey.dedup.input.li) <-tollervey.fi.li.names #assign samples name to list's elements
+names(tollervey.dedup.output.li) <-tollervey.fi.li.names #assign samples name to list's elements
+tollervey.dedup.input.df<-do.call(rbind, tollervey.dedup.input.li) %>% as.data.table( .,keep.rownames=TRUE) #transform to df -input reads df 
+colnames(tollervey.dedup.input.df)<- c("sample","input_reads")
+tollervey.dedup.output.df<-do.call(rbind, tollervey.dedup.output.li) %>% as.data.table( .,keep.rownames=TRUE) #transform to df -output reads df 
+colnames(tollervey.dedup.output.df)<- c("sample","output_reads")
+
+tollervey.dedup.df<-left_join(tollervey.dedup.input.df,tollervey.dedup.output.df) %>% as.data.frame() #join df by sample names
+
+tollervey.sample.order<-c("tollervey_brain1","tollervey_brain2","tollervey_brain6.high","tollervey_brain7.low","tollervey_brain3",
+                          "tollervey_brain4","tollervey_brain5","tollervey_ESC","tollervey_SHSY5Y1a","tollervey_SHSY5Y1b",
+                          "tollervey_SHSY5Y2","tollervey_SHSY5Y3","tollervey_SHSY5Y_cyt","tollervey_SHSY5Y_nucl")
+
+
+#setting df levels to reorder samples
+#input reads and output reads 
+tollervey.dedup.df<-tollervey.dedup.df[match(tollervey.sample.order, tollervey.dedup.df$sample),]
+tollervey.dedup.df$sample <- factor(tollervey.dedup.df$sample, levels = tollervey.sample.order)
+tollervey.dedup.tidy<-melt(tollervey.dedup.df, variable.name = "read", value.name = "count")
+tollervey.dedup.tidy$sample <- factor(tollervey.dedup.tidy$sample, levels = tollervey.sample.order)
+
+#ratio df 
+tollervey.dedup.ratio.df<-left_join(tollervey.dedup.input.df,tollervey.dedup.output.df) %>% mutate(ratio= input_reads/output_reads) %>% dplyr::select(sample,ratio) %>% as.data.table( .,keep.rownames=TRUE)
+tollervey.dedup.ratio.df<-tollervey.dedup.ratio.df[match(tollervey.sample.order, tollervey.dedup.ratio.df$sample),]
+tollervey.dedup.ratio.df$sample <- factor(tollervey.dedup.ratio.df$sample,levels = tollervey.sample.order)
+tollervey.dedup.radio.tidy<-melt(tollervey.dedup.ratio.df, variable.name = "read", value.name = "count")
+
+
+#build dedup reast in/out/ratio dataset G.Rot et al----------
+grot.dedup.input.li = list() #list input reads
+grot.dedup.output.li = list() #list output reads
+for (i in 1:length(grot.dedup.li)){
+  grot.dedup.input.li[i]<-as.integer(sub(".*?Input Reads:.*?(\\d+).*", "\\1", grot.dedup.list[[i]]))
+  grot.dedup.output.li[i]<-as.integer(sub(".*?Number of reads out:.*?(\\d+).*", "\\1", grot.dedup.list[[i]]))
+}
+
+names(grot.dedup.input.li) <-grot.fi.li.names #assign samples name to list's elements
+names(grot.dedup.output.li) <-grot.fi.li.names #assign samples name to list's elements
+grot.dedup.input.df<-do.call(rbind, grot.dedup.input.li) %>% as.data.table( .,keep.rownames=TRUE) #transform to df -input reads df 
+colnames(grot.dedup.input.df)<- c("sample","input_reads")
+grot.dedup.output.df<-do.call(rbind, grot.dedup.output.li) %>% as.data.table( .,keep.rownames=TRUE) #transform to df -output reads df 
+colnames(grot.dedup.output.df)<- c("sample","output_reads")
+
+grot.dedup.df<-left_join(grot.dedup.input.df,grot.dedup.output.df) %>% as.data.frame() #join df by sample names
+
+grot.sample.order<-c("grot_293fl_1", "grot_293fl_2")
+
+#setting df levels to reorder samples
+#input reads and output reads 
+grot.dedup.df<-grot.dedup.df[match(grot.sample.order, grot.dedup.df$sample),]
+grot.dedup.df$sample <- factor(grot.dedup.df$sample, levels = grot.sample.order)
+grot.dedup.tidy<-melt(grot.dedup.df, variable.name = "read", value.name = "count")
+grot.dedup.tidy$sample <- factor(grot.dedup.tidy$sample, levels = grot.sample.order)
+
+#ratio df 
+grot.dedup.ratio.df<-left_join(grot.dedup.input.df,grot.dedup.output.df) %>% mutate(ratio= input_reads/output_reads) %>% as.data.frame( .,keep.rownames=TRUE) %>% dplyr::select(sample,ratio)
+
+grot.dedup.ratio.df<-grot.dedup.ratio.df[match(grot.sample.order, grot.dedup.ratio.df$sample),]
+grot.dedup.ratio.df$sample <- factor(grot.dedup.ratio.df$sample,levels = grot.sample.order)
+grot.dedup.radio.tidy<-melt(grot.dedup.ratio.df, variable.name = "read", value.name = "count")
+
+#merging tidy df from different datasets-----------------------------
+
+#input reads and output reads df
+df.dedup.in.out<-dplyr::bind_rows(tollervey.dedup.tidy,grot.dedup.tidy) 
+
+#reads ratio df
+df.dedup.ratio<-dplyr::bind_rows(tollervey.dedup.radio.tidy,grot.dedup.radio.tidy)
+
+
+```
+
+#Dedup Plots-----------------------------
+```{r}
+#input reads and output reads
+dedup.in.out.plot<-ggplot(df.dedup.in.out) +
+  geom_bar(stat = "identity", aes(x=sample, y=count, fill=read), position = "dodge") +
+  scale_color_manual(values=mypal.dedup) +
+  scale_fill_manual(values=alpha(c(mypal.dedup))) +
+    scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  coord_flip() + 
+   theme_classic()+
+   ggtitle("deduplication plot") +
+theme(axis.title.y =element_blank(),legend.key.size = unit(0.5, 'cm'))
+ 
+dedup.in.out.plot
+
+
+ggsave(dedup.in.out.plot, filename = "/Users/manferg/clip_metanalysis/r-plots/dedup.in.out.plot.png", height = 6, width = 6)
+
+```
+
+
+```{r}
+#reads ratio
+dedup.ratio.plot<-ggplot(df.dedup.ratio) +
+  geom_bar(stat = "identity", aes(x=sample, y=count, fill=read), position = "dodge") +
+  scale_color_manual(values=mypal.dedup.ratio) +
+  scale_fill_manual(values=alpha(c(mypal.dedup.ratio))) +
+  coord_flip() +
+  ggtitle("Deduplication ratio") +
+theme_classic() +
+theme(axis.title.y =element_blank(),legend.key.size = unit(0.5, 'cm'))
+ggsave(dedup.ratio.plot, filename = "/Users/manferg/clip_metanalysis/r-plots/dedup.ratio.plot.png", height = 6, width = 6)
+
+dedup.ratio.plot
+#plot_grid(dedup.in.out.plot,dedup.ratio.plot, labels = NULL,rel_widths = 1)
+
+```
+
+#### apply threshold
+```{r}
+threshold.dedup = 10
+dedup.ratio.plot<-dedup.ratio.plot + geom_hline(yintercept = threshold.dedup , linetype = "dashed", color ="black") 
+dedup.ratio.plot
+```
+
+
+### LIBRARY SIZE 
+
+
+```{r}
+#Library size plot-----------
+#output reads (unique reads are considered as library size)
+
+df.dedup.in<-df.dedup.in.out[df.dedup.in.out$read == "input_reads",]
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",] #library sizes
+
+library.size.plot<-ggplot(df.dedup.out.lib)+
+  geom_bar(aes(x= sample,y=count,fill=read), stat ='identity') +
+  scale_color_manual(values=my.pal.lib) +
+  scale_fill_manual(values=my.pal.lib) +
+  theme_classic() +
+  coord_flip() +
+  ggtitle("Library size") 
+
+library.size.plot
+ggsave(library.size.plot, filename = "/Users/manferg/clip_metanalysis/r-plots/library.size.plot.png", height = 6, width = 6)
+
+```
+
+
+
+
+# GENE LENGTH AND GC CONTENT TABLE
+Import gene length and GC content data frame
+
+```{r message=FALSE, warning=FALSE}
+# GC_lengths_regions <- read_csv("/Users/manferg/Documents/ref/GC_lengths_regions.csv")
+# colnames(GC_lengths_regions)<-c("gene_id","length","GC")
+# GC_lengths<-as.data.frame(GC_lengths_regions)
+# GC_lengths
+# dim(GC_lengths) #60660
+# 
+# #view(GC_lengths) GC LENGTHS WAS GENERATED FROM GENCODE GTF - NOT FROM FLATTENED REGIONS GTF
+
+UGUGUG_lengths <- read_csv("/Users/manferg/Documents/ref/UGUGUG_lengths_regions.csv")
+colnames(UGUGUG_lengths)<-c("gene_id","length","UGhex")
+UGUGUG_lengths<-as.data.frame(UGUGUG_lengths)
+UGUGUG_lengths
+dim(UGUGUG_lengths) #59737 
+
+
+GU_lengths_regions <- read_csv("/Users/manferg/Documents/ref/GU_lengths_regions.csv")
+colnames(GU_lengths_regions)<-c("gene_id","length","GU")
+GC_lengths<-as.data.frame(GU_lengths_regions)
+GU_lengths_regions
+dim(GU_lengths_regions) #59737
+
+
+
+
+```
+
+#grep("ENSG00000251562.8",GC_lengths$gene_id)
+
+
+```{r}
+grep("ENSG00000270066",GC_lengths$gene_id)
+AL356488.2.length<-subset(GC_lengths,gene_id == "ENSG00000270066.3")
+AL356488.2.length
+
+grep("ENSG00000270066",UGUGUG_lengths$gene_id)
+AL356488.2.length<-subset(UGUGUG_lengths,gene_id == "ENSG00000270066.3")
+AL356488.2.length
+
+```
+
+
+```{r}
+#BED INTERSECTED FILES------------------------------------
+#Tollervey - import intersected files genialis----------------------
+tollervey.fi.li = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/tollervey/data/run/results/xlinks/intersected-genialis", pattern = ".xl.bed$", full.names = TRUE) #store file paths for each file in a list
+tollervey.fi.li.names = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/tollervey/data/run/results/xlinks/intersected-genialis", pattern = "xl.bed$", full.names = FALSE) %>%
+  gsub(".xl.bed","",.) %>%
+  gsub("intersect_","",.)#extracts files names in a seprate list
+
+tollervey.intersect.bed.li = list() #create empty list
+for (i in 1:length(tollervey.fi.li)){
+  temp = read.table(tollervey.fi.li[[i]])
+  tollervey.intersect.bed.li[[i]] = temp
+  tollervey.intersect.bed.li[[i]]<-dplyr::select(tollervey.intersect.bed.li[[i]], -V6,-V8,-V10,-V12) #remove variable columns
+  colnames(tollervey.intersect.bed.li[[i]]) = c("seqname","start","end","score","region","gene_id","gene_name","biotype") #rename columns
+  tollervey.intersect.bed.li[[i]]$gene_id <- sub(".", "NA", tollervey.intersect.bed.li[[i]]$gene_id)
+  tollervey.intersect.bed.li[[i]]$gene_id <- sub("NANSG","ENSG", tollervey.intersect.bed.li[[i]]$gene_id)
+    # Add `sample` column to the data frame
+  }
+names(tollervey.intersect.bed.li) <-tollervey.fi.li.names #adding sample names to list elements
+
+
+for (i in 1:length(tollervey.intersect.bed.li)){
+tollervey.intersect.bed.li[[i]]<- as.data.frame(tollervey.intersect.bed.li[[i]])
+sample<-as.character(names(tollervey.intersect.bed.li[i])) # Create a new vector with sample names
+tollervey.intersect.bed.li[[i]]$sample <- sample
+tollervey.intersect.bed.li[[i]]<-left_join(tollervey.intersect.bed.li[[i]],UGUGUG_lengths,by="gene_id")
+tollervey.intersect.bed.li[[i]]<-left_join(tollervey.intersect.bed.li[[i]],GU_lengths_regions,by="gene_id")
+}
+
+
+
+#G.Rot - import intersected files genialis----------------------
+grot.fi.li = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/grot/prova/run-imp/results/xlinks/intersected/", pattern = ".xl.bed$", full.names = TRUE) #store file paths for each file in a list
+grot.fi.li.names = list.files(path = "/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/grot/prova/run-imp/results/xlinks/intersected/", pattern = "xl.bed$", full.names = FALSE) %>%
+  gsub(".xl.bed","",.) %>%
+  gsub("intersect_","",.)#extracts files names in a seprate list
+grot.intersect.bed.li = list() #create empty list
+for (i in 1:length(grot.fi.li)){
+  temp = read.table(grot.fi.li[[i]])
+  grot.intersect.bed.li[[i]] = temp
+  grot.intersect.bed.li[[i]]<-dplyr::select(grot.intersect.bed.li[[i]], -V6,-V8,-V10,-V12) #remove variable columns
+  colnames(grot.intersect.bed.li[[i]]) = c("seqname","start","end","score","region","gene_id","gene_name","biotype") #rename columns
+  grot.intersect.bed.li[[i]]$gene_id <- sub(".", "NA", grot.intersect.bed.li[[i]]$gene_id)
+  grot.intersect.bed.li[[i]]$gene_id <- sub("NANSG","ENSG", grot.intersect.bed.li[[i]]$gene_id)
+}
+names(grot.intersect.bed.li) <-grot.fi.li.names #adding sample names to list elements
+
+
+for (i in 1:length(grot.intersect.bed.li)){
+  grot.intersect.bed.li[[i]]<- as.data.frame(grot.intersect.bed.li[[i]]) # Add `sample` column to the data frame
+  sample<-as.character(names(grot.intersect.bed.li[i])) # Create a new vector with sample names
+  grot.intersect.bed.li[[i]]$sample <- sample
+  grot.intersect.bed.li[[i]]<-left_join(grot.intersect.bed.li[[i]],UGUGUG_lengths,by="gene_id")
+  grot.intersect.bed.li[[i]]<-left_join(grot.intersect.bed.li[[i]],GU_lengths_regions,by="gene_id")
+}
+
+#main df on BED intersected for Tollervey et al + Grot et al ---------------------------
+
+#main df on BED intersected for Tollervey--------------------
+tollervey.intresected.df<-do.call(rbind, tollervey.intersect.bed.li)
+tollervey.intresected.df.chromosomes<-tollervey.intresected.df[grep("chr", tollervey.intresected.df$seqname),] #select only chromosomes / discard scaffolds
+
+
+#main df on BED intersected for Grot---------------------
+grot.intresected.df<-do.call(rbind, grot.intersect.bed.li)
+grot.intresected.df
+grot.intresected.df.chromosomes<-grot.intresected.df[grep("chr", grot.intresected.df$seqname),] #select only chromosomes / discard scaffolds
+
+
+intresected.df<-dplyr::bind_rows(tollervey.intresected.df,grot.intresected.df)
+
+write.csv(intresected.df,file="/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/clip_metanalysis/intresected.df.csv")
+write.csv(intresected.df,file="/Users/manferg/clip_metanalysis/intresected.df.csv")
+
+intresected.chr.df<-dplyr::bind_rows(tollervey.intresected.df.chromosomes,grot.intresected.df.chromosomes)
+
+intresected.chr.df<-intresected.chr.df %>% dplyr::select( .,-length.y) 
+ names(intresected.chr.df)[names(intresected.chr.df) == 'length.x'] <- 'length'
+write.csv(intresected.chr.df,file="/Volumes/lab-luscomben/home/users/manferg/projects/nf/clip/clip_metanalysis/intresected.chr.df.csv")
+write.csv(intresected.chr.df,file="/Users/manferg/clip_metanalysis/intresected.chr.df.csv")
+
+dim(intresected.chr.df) #18570900 
+
+
+
+
+
+
+
+
+
+
+```
+
+
+
+
+# IMPORT INTERSECTED BED FILES
+
+```{r}
+intresected.chr.df<-read_csv("/Users/manferg/clip_metanalysis/intresected.chr.df.csv")
+intresected.df<-read_csv("/Users/manferg/clip_metanalysis/intresected.df.csv")
+
+intresected.df<-intresected.df %>% as.data.frame() %>% dplyr::select(-X1)
+intresected.chr.df<-intresected.chr.df %>% as.data.frame() %>% dplyr::select(-X1)
+
+unique(intresected.chr.df$biotype)
+
+#rename tollervey_SHSY5Y1a and tollervey_SHSY5Y1b to high and low.
+intresected.df<-intresected.df %>% mutate(sample = gsub("tollervey_SHSY5Y1a", "tollervey_SHSY5Y1a.high",sample), sample = gsub("tollervey_SHSY5Y1b", "tollervey_SHSY5Y1b.low", sample))
+#rename tollervey_SHSY5Y1a and tollervey_SHSY5Y1b to high and low.
+intresected.chr.df<-intresected.chr.df %>% mutate(sample = gsub("tollervey_SHSY5Y1a", "tollervey_SHSY5Y1a.high",sample), sample = gsub("tollervey_SHSY5Y1b", "tollervey_SHSY5Y1b.low", sample))
+
+
+```
+### IMPORT METADATA
+```{r}
+#METADATA----------------------
+# library(readxl)
+# df = read_excel("/Users/manferg/clip_metanalysis/meta_metadata1.xlsx", sheet=1)
+#   write.csv(df, gsub("xlsx", "csv", "/Users/manferg/clip_metanalysis/meta_metadata.csv"), row.names=FALSE)
+
+metadata<- read_csv("/Users/manferg/clip_metanalysis/meta_metadata.csv") %>% as.data.frame %>% column_to_rownames(var="meta_id")
+rownames(metadata)
+colnames(metadata)
+
+metadata<- metadata[reorder_sample_idx ,]
+metadata$meta_id <- rownames(metadata)
+metadata<- metadata %>% mutate(meta_id = gsub("tollervey_SHSY5Y1a", "tollervey_SHSY5Y1a.high",meta_id), meta_id = gsub("tollervey_SHSY5Y1b", "tollervey_SHSY5Y1b.low", meta_id))
+metadata$meta_id -> rownames(metadata)
+
+```
+
+### Merging BED INTERSECT and METADATA 
+
+```{r}
+intresected.d<-left_join(intresected.df, metadata, by=c("sample" = "meta_id")) 
+intresected.chr.df<-left_join(intresected.chr.df, metadata, by=c("sample" = "meta_id"))
+
+intresected.df.fil<- dplyr::select(intresected.d,-species,-technology, -study_id, -barcode) #filter metada columns to exclude
+intresected.chr.df.fil<-dplyr::select(intresected.chr.df,-species,-technology, -study_id, -barcode)
+
+unique(intresected.chr.df.fil$sample)
+
+dim(intresected.chr.df) #18570900 
+# p<-intresected.chr.df.fil[intresected.chr.df.fil$gene_name == "GSE1" & intresected.chr.df.fil$sample == "grot_293fl_1" & intresected.chr.df.fil$region == "intron", ]
+# 
+# p<-intresected.chr.df.fil %>% filter(.,gene_name == "GSE1") & intresected.chr.df.fil$sample == "tollervey_brain1" ,]
+# 
+# x<-p %>% summarize(n=n(),score=sum(score))
+#  group_by(gene_name,region,GC,length)
+
+```
+
+
+
+### DATASET LISTS 
+
+Split each samples dataset as an element of a list 
+
+```{r}
+#main df list----------------
+main.li = split(intresected.df.fil,intresected.d$sample) #transform df into list 
+main.chr.li = split(intresected.chr.df.fil,intresected.chr.df$sample) #transform df into list 
+
+
+main.chr.li<-main.chr.li[reorder_sample_idx] #reorder liste elements 
+names(main.chr.li) #check order
+
+```
+
+# number of xlinks per gene 
+```{r}
+#counts (or number of xlinks) for each gene/region------------------CHR
+xlink.events.gene.region.chr.li =list()
+top.xlink.events.gene.region.chr.li=list()
+for (i in 1:length(main.chr.li)){
+  xlink.events.gene.region.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,region,UGhex,GU,length) %>% summarize(n=n()) %>% arrange( .,desc(n)) %>% as.data.frame()#counts (or number of xlinks) for each gene.region. 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  xlink.events.gene.region.chr.li[[i]]$sample <- sample
+  top.xlink.events.gene.region.chr.li[[i]]<-xlink.events.gene.region.chr.li[[i]][2:10,]  #exclude "None" and list top 20 gene.region.s
+  top.xlink.events.gene.region.chr.li[[i]]$gene_name <- factor(top.xlink.events.gene.region.chr.li[[i]]$gene_name , levels = top.xlink.events.gene.region.chr.li[[i]]$gene_name[order(top.xlink.events.gene.region.chr.li[[i]]$n)])
+
+}
+
+sapply(xlink.events.gene.region.chr.li, nrow)#different number of genes in each datasets
+xlink.events.chr.df<-do.call(rbind,xlink.events.gene.region.chr.li) #convert back to df to plot
+
+
+
+#reorder levels as samples order
+xlink.events.chr.df$sample <- factor(xlink.events.chr.df$sample , levels=unique(xlink.events.chr.df$sample))
+xlink.events.chr.df$region <- factor(xlink.events.chr.df$region , levels=unique(xlink.events.chr.df$region))
+xlink.events.chr.df$gene_name <- factor(xlink.events.chr.df$gene_name , levels=unique(xlink.events.chr.df$gene_name))
+
+top.xlink.events.chr.df<-do.call(rbind,top.xlink.events.gene.region.chr.li)
+top.xlink.events.chr.df<-left_join(top.xlink.events.chr.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+top.xlink.events.chr.df$sample <- factor(top.xlink.events.chr.df$sample , levels=unique(top.xlink.events.chr.df$sample ))
+
+#data exploration xlink df----------
+
+dim(xlink.events.chr.df)  #389974
+
+length(unique(xlink.events.chr.df$gene_name)) #35248 unique gene_name
+
+
+xlink.events.unique.gene<-xlink.events.chr.df %>% group_by(gene_name,sample) %>% summarize(n=sum(n)) %>% arrange( .,desc(n)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+length(xlink.events.unique.gene$gene_name) #215285
+
+# df.tb = xlink.events.unique.gene%>%
+#   spread(sample, n)
+# 
+# df.tb= df.tb %>%
+#   column_to_rownames("gene_name")
+
+
+
+
+
+```
+
+
+# score per gene 
+
+```{r}
+
+score.events.gene.region.chr.li =list()
+top.score.events.gene.region.chr.li=list()
+for (i in 1:length(main.chr.li)){
+  score.events.gene.region.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,region,UGhex,GU,length) %>% summarize(score=sum(score)) %>% arrange( .,desc(score)) %>% as.data.frame()#counts (or number of scores) for each gene.region. 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  score.events.gene.region.chr.li[[i]]$sample <- sample
+}
+
+sapply(score.events.gene.region.chr.li, nrow)#different number of genes in each datasets
+score.events.chr.df<-do.call(rbind,score.events.gene.region.chr.li) #convert back to df to plot
+
+#reorder levels as samples order
+score.events.chr.df$sample <- factor(score.events.chr.df$sample , levels=unique(score.events.chr.df$sample ))
+score.events.chr.df$gene_name <- factor(score.events.chr.df$gene_name , levels=unique(score.events.chr.df$gene_name ))
+score.events.chr.df$region <- factor(score.events.chr.df$region , levels=unique(score.events.chr.df$region ))
+length(score.events.chr.df$gene_name) #390292
+
+```
+
+Merging score and xlink per gene datasets 
+```{r}
+
+score.only<-score.events.chr.df %>% dplyr::select(score,gene_name,sample,region,GU,UGhex)
+score.xlink.df<-inner_join(xlink.events.chr.df,score.only, by = c("sample" = "sample" ,"region"="region","gene_name" = "gene_name","GU" = "GU", "UGhex"="UGhex")) %>% na.omit() #remove intergenic region to plot frequencies 
+
+
+
+dim(score.xlink.df) #3390246 without NA &  #389974 with NA 
+dim(xlink.events.chr.df)  #390256
+dim(score.events.chr.df) #390256
+
+
+# #data exploration score df----------
+# score.events.unique.gene<-score.events.chr.df %>% group_by(gene_name,sample) %>% summarize(score=sum(score)) %>% arrange( .,desc(score)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+# length(score.events.unique.gene$gene_name)
+# 
+# dim(score.events.chr.df) #390292
+# 
+# length(unique(score.events.chr.df$gene_name)) #35248 unique gene_name
+
+# score.sub<-score.events.chr.df %>% dplyr::select(gene_name,score,sample,region)
+# 
+# # df<-left_join(xlink.events.chr.df,score.sub, by = c("gene_name" = "gene_name", "sample" = "sample","region"="region")) %>% na.omit()
+# # df$score<-as.integer(df$score) 
+# # df$gene_name<-as.factor(df$gene_name) 
+
+
+```
+
+
+
+#FILTERING OUT LOW CROSS-LINKS 
+
+```{r}
+
+score.xlink.df.filt<-score.xlink.df %>% filter(score > 10) %>% filter(n > 10)
+#score.xlink.df.filt<-score.xlink.df %>% filter(n > 5)
+score.xlink.df.filt$n<-as.double(score.xlink.df.filt$n)
+
+score.xlink.df.filt<- score.xlink.df.filt[score.xlink.df.filt$n !=score.xlink.df.filt$score, ]
+
+
+score.xlink.df.filt<-arrange(score.xlink.df.filt, score.xlink.df.filt$score)
+
+
+dim(score.xlink.df) #390246 
+dim(score.xlink.df.filt) #63244 
+
+```
+
+
+#DENSITY PLOT XLINKS UNFILTERED DATASET AND FILTERED 
+
+XLINK NUMBER FREQUENCY 
+```{r}
+#Density Plot of XLINKS
+# xlink.region.hex<-ggplot(score.xlink.df, aes(x = reorder_within(region, -UGhex, sample), y = UGhex, fill=region)) + 
+#   geom_bar(stat = "identity") +
+#   scale_color_manual(values=mypal.region) +
+#   scale_fill_manual(values=alpha(c(mypal.region))) +
+#   facet_wrap(~sample,scales = "free") + #each facet has a different scale
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   ggtitle("Cross-links events distribution -library size normalised") +
+#   ylab("xlink events counts") + 
+#   theme_classic() +
+#   theme(axis.title.x=element_blank(),
+#         axis.text.x=element_blank(),
+#          axis.ticks.x=element_blank()) #+
+
+
+dens_plot_xl<-ggplot(score.xlink.df,aes(x=log2(n+1))) +
+  geom_density() +
+  ggtitle("Cross-link sites frequency")+
+  facet_wrap(~sample, scale="fixed") +
+  xlab("Log2 xlinks") +
+  ylab("Frequency") +
+  theme_bw()
+dens_plot_xl
+
+
+dens_plot_xl_fil<-ggplot(score.xlink.df.filt,aes(x=log2(n+1))) +
+  geom_density() +
+  facet_wrap(~sample, scale="fixed") +
+  ggtitle("Cross-link sites frequency post filtering")+
+  xlab("Log2 xlinks") +
+  ylab("Frequency") +
+  theme_bw()
+dens_plot_xl_fil
+
+
+
+dens_plot_xl<-ggplot(score.xlink.df,aes(x=log2(n+1), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+  ggtitle("Cross-link sites frequency")+
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 xlinks") +
+  ylab("Frequency") +
+  theme_bw()
+dens_plot_xl
+
+#filtered 
+dens_plot_xl_fil<-ggplot(score.xlink.df.filt,aes(x=log2(n+1), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+   ggtitle("Cross-link sites frequency post filtering")+
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 xlinks") +
+  ylab("Frequency") +
+  theme_bw()
+dens_plot_xl_fil
+
+```
+
+SCORE FREQUENCY 
+```{r}
+
+
+dens_plot_score<-ggplot(score.xlink.df,aes(x=log2(score))) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+  xlab("Log2 score") +
+  ylab("Frequency") +
+  ggtitle("Cross-links frequency")+
+  theme_bw()
+dens_plot_score
+
+dens_plot_score_fil<-ggplot(score.xlink.df.filt,aes(x=log2(score))) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+  xlab("Log2 score") +
+  ylab("Frequency") +
+  ggtitle("Cross-links frequency")+
+  theme_bw()
+dens_plot_score_fil
+
+
+dens_plot_score<-ggplot(score.xlink.df,aes(x=log2(score), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 score") +
+  ylab("Frequency") +
+  ggtitle("Score frequency")+
+  theme_bw()
+dens_plot_score
+
+
+
+dens_plot_score_fil<-ggplot(score.xlink.df.filt,aes(x=log2(score), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample,scale="fixed") +
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 score") +
+  ylab("Frequency") +
+  ggtitle("score frequency")+
+  theme_bw()
+dens_plot_score_fil
+
+```
+
+
+
+
+```{r}
+
+
+# dens_plot_score_his<-ggplot(score.xlink.df.filt,aes(x=score, y=n)) +
+#   geom_histogram(stat="identity",bins = 30) +
+#   facet_wrap(~sample,scale="fixed") +
+#   xlab("number of xlinks") +
+#   ylab("xlink sites") +
+#   ggtitle("Gene length frequency")+
+#   theme_bw() + 
+#   scale_y_continuous(labels = unit_format(scale = 1e-3)) +
+#   xlim(0,1000)
+# dens_plot_score_his
+# 
+# dens_plot_score_his<-ggplot(score.xlink.df.filt,aes(x=score, y=n)) +
+#   geom_bar(stat="identity") +
+#   facet_wrap(~sample,scale="fixed") +
+#   xlab("number of xlinks") +
+#   ylab("xlink sites") +
+#   ggtitle("Gene length frequency")+
+#   theme_bw() + 
+#   scale_y_continuous(labels = unit_format(scale = 1e-3)) +
+#   xlim(0,1000)
+# dens_plot_score_his
+
+```
+
+
+
+
+
+GENE LENGTH FREQUENCY 
+
+```{r}
+dens_plot_xl_length<-ggplot(score.xlink.df,aes(x=log2(length), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample) +
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 gene length") +
+  ylab("Frequency") +
+  ggtitle("Gene length frequency")+
+  theme_bw()
+dens_plot_xl_length
+
+dens_plot_xl_length_fil<-ggplot(score.xlink.df.filt,aes(x=log2(length), colour= region)) +
+  geom_density() +
+  facet_wrap(~sample) +
+   scale_color_manual(values=mypal.region) +
+  xlab("Log2 gene length") +
+  ylab("Frequency") +
+  ggtitle("Gene length frequency")+
+  theme_bw()
+dens_plot_xl_length_fil
+```
+
+
+
+
+
+# Genes distribution according to score and number of xlinks 
+```{r, fig.width = 12, fig.height = 12}
+
+jitplot<-ggplot(score.xlink.df,aes(x=log2(n),y=log2(score))) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(xlinks)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot
+
+
+jitplot<-ggplot(score.xlink.df,aes(x=log2(n),y=log2(score),fill=region, colour=region)) +
+ scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(xlinks)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot
+
+
+
+jitplot_fil<-ggplot(score.xlink.df.filt,aes(x=log2(length),y=log2(n))) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(xlinks)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot_fil
+
+
+jitplot_fil_score_length<-ggplot(score.xlink.df,aes(x=log2(length),y=log2(score),color=region)) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(gene_length)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot_fil_score_length
+
+
+
+jitplot_fil<-ggplot(score.xlink.df.filt,aes(x=log2(length),y=log2(n))) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(xlinks)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot_fil
+
+
+jitplot_fil_score_length<-ggplot(score.xlink.df.filt,aes(x=log2(length),y=log2(score),color=region)) +
+  geom_jitter(alpha=1/3,size=0.05) +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample, scale="fixed") +
+  xlab("log2(gene_length)") +
+  ylab("log2(score)") +
+  theme_bw()
+jitplot_fil_score_length
+
+
+  ggplot(score.xlink.df,aes(x=log2(n),y=log2(score))) +
+  geom_point(size=0.05, labels=df$gene_name) +facet_wrap(~sample) + theme_bw()
+
+
+
+
+
+```
+
+
+```{r, fig.width = 8, fig.height = 9}
+
+# for (sample in unique(df$sample)) {
+#   plt_df <- dplyr::filter(df, sample==sample)
+#   smoothScatter(df$gene_name, log2(df$n))
+# }
+
+library(scattermore)
+
+ scatter<- ggplot(score.xlink.df) +
+  geom_scattermore(aes(x=log2(n),y=log2(score)), stat="identity",pointsize=1,colour="black") + facet_wrap(~sample) + theme_bw()
+  
+scatter
+
+
+ scatter<- ggplot(score.xlink.df) +
+  geom_scattermore(aes(x=log2(n),y=log2(score),fill=region, colour=region),stat="identity",pointsize=2) +
+   scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample) + theme_bw()
+  
+scatter
+
+
+ scatter_fil<- ggplot(score.xlink.df.filt) +
+  geom_scattermore(aes(x=log2(n),y=log2(score)), stat="identity",pointsize=1,colour="black") + facet_wrap(~sample) + theme_bw()
+  
+ scatter_fil
+
+
+ scatter_fil<- ggplot(score.xlink.df.filt) +
+  geom_scattermore(aes(x=log2(n),y=log2(score),fill=region, colour=region),stat="identity",pointsize=2) +
+   scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample) + theme_bw()
+ scatter_fil
+ 
+ 
+```
+
+
+
+
+
+```{r, fig.width = 12, fig.height = 12}
+
+  ggplot(df,aes(x=log2(n),y=log2(score))) +
+  geom_point(size=0.5, labels=df$gene_name) +facet_wrap(~sample) + theme_bw()
+  
+
+  
+df2= score.xlink.df.filt %>% filter(sample == "grot_293fl_1")
+  
+df3= df2 %>% filter(score >10 | n > 10 )
+
+df2= df2%>% column_to_rownames("gene_name")
+m <- lm(n ~ score, df2)
+m$residuals 
+tidy(m)
+aug<-augment(m)
+aug$.std.resid->df2$st.resid
+df2= df2 %>% arrange(desc(st.resid))
+  
+sub.res.df2<-df2 %>% filter(st.resid <= -5 | st.resid >= 0.5 |log2(score) < 3 | log2(n) < 3 ) 
+  
+  
+  geom_text_repel(data          = subset(df, log2(score) > 5),
+                  nudge_y       = 32 - subset(df, log2(score) > 5)$df,
+                  size          = 4,
+                  box.padding   = 1.5,
+                  point.padding = 0.5,
+                  force         = 100,
+                  segment.size  = 0.2,
+                  segment.color = "grey50",
+                  direction     = "x") +
+  geom_label_repel(data         = subset(df, log2(n) < 5),
+                  nudge_y       = 16 - subset(df, log2(n) < 5)$df,
+                  size          = 4,
+                  box.padding   = 0.5,
+                  point.padding = 0.5,
+                  force         = 100,
+                  segment.size  = 0.2,
+                  segment.color = "grey50",
+                  direction     = "x") +
+  facet_wrap(~sample) + theme_bw()
+
+  
+  AC007529.2
+  
+ck= xlink.events.chr.df %>% filter (sample == "grot_293fl_1")
+ck= ck %>% arrange(n)
+
+which(grepl("AC007529.2",ck$gene_name))
+
+
+ck[52557,]
+
+
+
+ggplot(df2,aes(x=log2(n),y=log2(score))) +
+geom_point(size=0.5) + geom_text(data=sub.res.df2, size = 5, vjust = 3, aes(x=log2(n),y=log2(score),label=sub.res.df2$gene_name)) + 
+geom_smooth(method=lm) + theme_bw()
+
+```
+  
+  
+  
+```{r}
+str(df)
+ggscatter(df, x="n", y="score", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",facet.by="sample",size=0.05,
+          add.params = list(color = "blue", fill = "lightgray"),
+          label = "gene_name") + yscale("log2", .format = TRUE)+ xscale("log2", .format = TRUE) 
+
+
+
+
+
+
+ggplot(df) + 
+  geom_jitter(aes(x=gene_name,y=n))
+
+ggplot(df) + 
+  geom_scattermore(aes(x=reorder(gene_name,log2(n)),y=log2(n),colour=region)) 
+
+
+ggplot(df) + 
+  geom_scattermore(aes(x=reorder(gene_name,log2(n)),y=log2(n))) + 
+geom_scattermore(aes(x=reorder(gene_name,log2(n)),y=log2(score)),colour="red")
+
+
+
+ggplot(df) + 
+  geom_scattermore(aes(x=reorder(gene_name,n),y=n)) + 
+geom_scattermore(aes(x=reorder(gene_name,n),y=score),colour="red")
+
+
+```
+
+```{r}
+
+#PROPRTION OF NUCLEAR AND CYTOPLASMIC CDNA TARGET IN SH-SY5Y COMPARTMENTS
+nucl_cyt<-score.xlink.df %>% filter(sample == "tollervey_SHSY5Y_cyt" | sample == "tollervey_SHSY5Y_nucl")
+
+## NORMALISE SCORE ON LIBRARY SIZE 
+
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",]
+
+nucl_cyt.norm<-left_join(nucl_cyt, df.dedup.out.lib, by = "sample")
+nucl_cyt.norm<-nucl_cyt.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(score.norm = score/ls.factor)
+
+nucl_cyt.norm<-nucl_cyt.norm %>% group_by(sample,gene_name) %>% summarize(score.gene.norm=sum(score.norm)) %>% mutate(perc.norm = score.gene.norm * 100/ sum(score.gene.norm)) %>% arrange( .,desc(score.gene.norm)) 
+
+dim(nucl_cyt.norm)
+
+nucl_cyt.ann<-nucl_cyt %>% dplyr::select(gene_name,UGhex,GU,length) %>% distinct()
+
+
+dim(nucl_cyt.ann)
+
+
+nucl_cyt_perc<-dcast(nucl_cyt.norm, gene_name ~ sample) 
+nucl_cyt_perc<-inner_join(nucl_cyt_perc,nucl_cyt.ann, by= "gene_name")
+nucl_cyt_perc[is.na(nucl_cyt_perc)] <- 0 #transform NA values in 0 
+
+dim(nucl_cyt_perc)
+
+
+
+scaterplot<-ggplot(nucl_cyt_perc) +
+  geom_point(aes(x=tollervey_SHSY5Y_cyt,y=tollervey_SHSY5Y_nucl,fill=length,colour=length),size=0.5) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  geom_text(data=nucl_cyt_perc, size =2, vjust = 2, aes(x=tollervey_SHSY5Y_cyt,y=tollervey_SHSY5Y_nucl,label=gene_name)) +
+  ggtitle("TDP-43 compartment specific interaction in SH-SY5Y") +
+  xlab("proportion of cytoplasmic cDNAs (%)") +
+  ylab("proportion of nuclear cDNAs (%)") +
+  theme_bw()
+
+
+
+
+scaterplot<-ggplot(nucl_cyt_perc) +
+  geom_point(aes(x=tollervey_SHSY5Y_cyt,y=tollervey_SHSY5Y_nucl,fill=length,colour=length),size=0.5) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 compartment specific interaction in SH-SY5Y") +
+  xlab("proportion of cytoplasmic cDNAs (%)") +
+  ylab("proportion of nuclear cDNAs (%)") +
+  theme_bw()
+  
+scaterplot<-ggplot(nucl_cyt_perc) +
+  geom_point(aes(x=tollervey_SHSY5Y_cyt,y=tollervey_SHSY5Y_nucl,fill=UGhex,colour=UGhex),size=0.5) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 compartment specific interaction in SH-SY5Y") +
+  xlab("proportion of cytoplasmic cDNAs (%)") +
+  ylab("proportion of nuclear cDNAs (%)") +
+  theme_bw()
+
+
+
+#PROPRTION OF NUCLEAR AND CYTOPLASMIC CDNA TARGET IN SH-SY5Y COMPARTMENTS -KEEP INFO ON REGION IDENTITY
+nucl_cyt<-score.xlink.df.filt %>% filter(sample == "tollervey_SHSY5Y_cyt" | sample == "tollervey_SHSY5Y_nucl")
+
+## NORMALISE SCORE ON LIBRARY SIZE 
+
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",]
+
+nucl_cyt.norm<-left_join(nucl_cyt, df.dedup.out.lib, by = "sample")
+nucl_cyt.norm<-nucl_cyt.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(score.norm = score/ls.factor)
+
+nucl_cyt.norm<-nucl_cyt.norm  %>% mutate(perc.norm = score.norm * 100/ sum(score.norm)) %>% arrange( .,desc(perc.norm)) 
+
+dim(nucl_cyt.norm)
+
+nucl_cyt.ann<-nucl_cyt %>% dplyr::select(gene_name,region,UGhex,GU,length) %>% distinct()
+
+
+dim(nucl_cyt.ann)
+
+
+nucl_cyt_perc<-dcast(nucl_cyt.norm, gene_name ~ sample) 
+nucl_cyt_perc<-inner_join(nucl_cyt_perc,nucl_cyt.ann, by= "gene_name")
+nucl_cyt_perc[is.na(nucl_cyt_perc)] <- 0 #transform NA values in 0 
+
+
+
+
+dim(nucl_cyt_perc)
+
+
+scaterplot<-ggplot(nucl_cyt.norm) +
+  geom_point(aes(x=gene_name,y=perc.norm,fill=sample,colour=region),size=0.5) + 
+  geom_text(data=nucl_cyt.norm, size =2, vjust = 2, aes(x=gene_name,y=perc.norm,label=gene_name)) +
+  ggtitle("TDP-43 compartment specific interaction in SH-SY5Y") +
+  xlab("proportion of cytoplasmic cDNAs (%)") +
+  ylab("proportion of nuclear cDNAs (%)") +
+  theme_bw()
+
+```
+
+
+
+
+
+
+
+
+```{r}
+
+nucl_cyt$gene_name<-as.character(nucl_cyt$gene_name)
+library(VennDiagram)
+library(ggVennDiagram)
+library(gplots)
+
+# pass a list of genes names for each group of the diagram 
+cyt.ann<-nucl_cyt %>% filter(sample ==  "tollervey_SHSY5Y_cyt") %>% dplyr::select( .,gene_name,region,n,GU,length)
+cyt.ann$gene_name<-as.factor(cyt.ann$gene_name)
+nucl.ann<-nucl_cyt %>% filter(sample ==  "tollervey_SHSY5Y_nucl") %>% dplyr::select( .,gene_name,region,n,GU,length)
+nucl.ann$gene_name<-as.factor(nucl.ann$gene_name)
+
+cyt.genes<-nucl_cyt %>% filter(sample ==  "tollervey_SHSY5Y_cyt") %>% dplyr::select( .,gene_name)
+cyt.genes<-cyt.genes[-1,]
+nucl.genes<-nucl_cyt %>% filter(sample ==  "tollervey_SHSY5Y_nucl") %>% dplyr::select( .,gene_name)
+nucl.genes<-nucl.genes[-1,]
+
+
+colors<-c("#6bffab","#c3db0f")
+
+# Make Venn diagram from list of groups
+x = list(cyt.genes, nucl.genes)
+names(x)<-c("cytoplasm","nuclear")
+
+p<-ggVennDiagram(x, 
+                 category.names = names(x), label_alpha = 0 
+                 ,lty="dashed",color="black") + ggplot2::scale_fill_gradient(low="white",high = "light blue") + scale_color_brewer(palette = "Paired")
+
+
+```
+
+
+
+
+
+
+
+
+
+
+#extract intersection attributes 
+```{r}
+ItemsList <- venn(x, show.plot = FALSE)
+
+lengths(attributes(ItemsList)$intersections)
+attributes(ItemsList)$intersections
+
+
+library(nVennR)
+library(rsvg)
+library(grImport2)
+myV<-plotVenn(list(cyt.genes, nucl.genes), sNames=c("cytoplasm","nuclear"),outFile='~/myv.svg',systemShow = TRUE,labelRegions=F,setColors=c('#ff5e7a', '#36efeb'),fontScale=1.5, opacity=0.2, borderWidth=2) 
+showSVG(myV, outFile = "myv.svg")
+
+
+intersects <- listVennRegions(myV)
+names(intersects)<-c("nuclear","cytoplasm","shared")
+lengths(intersects)
+      # pull lists together
+  tidy_intersect <- plyr::ldply(intersects, cbind)
+  
+     
+intersects$shared
+     
+  c<- cyt.ann %>% filter(gene_name %in% intersects$cytoplasm) %>% mutate(fractio ="cyt")
+dim(c) 
+c.top<-c[1:30,]
+
+
+n<- nucl.ann %>% filter(gene_name%in% intersects$nuclear) %>% mutate(fractio ="nucl")
+dim(n) 
+n.top<-n[1:30,]
+
+t<-rbind(c,n) 
+as.factor(t$fractio)
+
+
+
+c.nc<-c %>% filter(region == "ncRNA")
+dim(c.nc)
+c.nc.top<-c.nc[1:20,]
+n.nc<-n %>% filter(region == "ncRNA")
+dim(n.nc)
+n.nc.top<-n.nc[1:20,]
+
+```
+
+
+```{r}
+c.bands.region<-ggplot(c.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 cytoplasm") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+c.nc.bands.region<-ggplot(c.nc.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 nuclear") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+```{r}
+n.bands.region<-ggplot(n.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 targets lower band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+n.nc.bands.region<-ggplot(n.nc.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 targets lower band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+```
+
+
+
+
+l.density<-ggplot(t, aes(x = log2(length), fill=band)) + 
+    geom_density(alpha=1/5) +
+  xlab("log2 transcript length") +
+  theme_bw()
+l.density
+
+l.density<-ggplot(t, aes(x = log2(GC+1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+
+l.density<-ggplot(t, aes(x = log10(n +1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+h.bands.region<-ggplot(h.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+h.bands.region<-ggplot(h, aes(x = reorder(gene_name,n), y = n, fill=length)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+    scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+#SAME CALCULATION OF LIBRARY SIZE 
+tot.xl.data<- sapply(main.chr.li, NROW) %>% as.data.table(keep.rownames = TRUE)
+colnames(tot.xl.data)<-c("sample","total.xl")
+
+tot.xl.data.plot<-ggplot(tot.xl.data) +
+  geom_bar(stat = "identity", aes(x=sample, y=total.xl), position = "dodge") +
+  coord_flip() +
+  ggtitle("Total xl") +
+theme_classic() +
+theme(axis.title.y =element_blank(),legend.key.size = unit(0.5, 'cm'))
+ggsave(tot.xl.data.plot, filename = "/Users/manferg/clip_metanalysis/r-plots/tot.xl.data.plot.png", height = 6, width = 6)
+
+tot.xl.data.plot
+```
+
+
+### CROSS-LINKS DISTRIBUTION ACROSS GENOMIC REGIONS PER GENE
+### SUBSET XLINK WITH A SINGLE REGION 
+```{r}
+chr.unique.region.counts.li =list()
+for (i in 1:length(main.chr.li)){
+ chr.unique.region.counts.li[[i]]<-main.chr.li[[i]] %>% add_count(gene_name,region) %>% 
+  filter(n == 1) %>% summarize(n=n()) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.unique.region.counts.li[[i]]$sample <- sample
+}
+chr.unique.region.counts.df<-do.call(rbind,chr.unique.region.counts.li) %>% as.data.frame()#convert back to df to plot
+
+colnames(chr.unique.region.counts.df)<-c("unique.regions", "sample")
+
+
+chr.multiple.region.counts.li =list()
+for (i in 1:length(main.chr.li)){
+ chr.multiple.region.counts.li[[i]]<-main.chr.li[[i]] %>% add_count(gene_name,region) %>% 
+  filter(n > 1) %>% summarize(n=n()) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.multiple.region.counts.li[[i]]$sample <- sample
+}
+chr.multiple.region.counts.df<-do.call(rbind,chr.multiple.region.counts.li) %>% as.data.frame()#convert back to df to plot
+colnames(chr.multiple.region.counts.df)<-c("multiple.regions", "sample")
+
+
+xl.overview<-left_join(chr.multiple.region.counts.df,chr.unique.region.counts.df,by="sample") 
+xl.overview.tidy<-melt(xl.overview,variable.name = "regions",value.name = "count")
+
+
+brks <- c(0, 0.25, 0.5, 0.75, 1)
+
+xl.overview.plot<-ggplot(xl.overview.tidy) +
+  geom_bar(stat = "identity", aes(x=sample, y=count,fill= regions), position="fill") +
+  coord_flip() +
+  ggtitle("Region mapping overview") +
+theme_classic() +
+   scale_y_continuous(breaks = brks, labels = scales::percent(brks)) +
+theme(axis.title.y =element_blank(),legend.key.size = unit(0.5, 'cm'))
+ggsave(xl.overview.plot, filename = "/Users/manferg/clip_metanalysis/r-plots/xl.overview.plot.png", height = 6, width = 6)
+
+xl.overview.plot
+
+
+```
+
+
+
+```{r}
+
+chr.unique.region.counts.li =list()
+for (i in 1:length(main.chr.li)){
+ chr.unique.region.counts.li[[i]]<-main.chr.li[[i]] %>% add_count(gene_name,region) %>% 
+  filter(n == 1) %>% group_by(region) %>% summarize(n=n()) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.unique.region.counts.li[[i]]$sample <- sample
+}
+chr.unique.region.counts.df<-do.call(rbind,chr.unique.region.counts.li) %>% as.data.frame()#convert back to df to plot
+
+
+chr.unique.region.counts.df<-left_join(chr.unique.region.counts.df,metadata,by=c("sample" = "meta_id"))
+
+#reorder levels as samples order
+chr.unique.region.counts.df$sample <- factor(chr.unique.region.counts.df$sample , levels=unique(chr.unique.region.counts.df$sample ))
+
+
+chr.unique.model.region.counts.df<-chr.unique.region.counts.df %>% group_by(model,region) %>% 
+   summarize(n=sum(n)) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+
+```
+
+
+
+```{r}
+xlink.unique.region.chr<-ggplot(chr.unique.region.counts.df, aes(x = reorder_within(region, -n, sample), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution - unique regions") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+  #       
+ggsave(xlink.unique.region.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.unique.region.chr.png", height = 8, width = 9)
+xlink.unique.region.chr
+
+
+
+
+
+xlink.unique.region.chr.perc.model<-ggplot(chr.unique.model.region.counts.df,aes(x = region, y = perc,fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  #scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+   theme(legend.position="none")+
+  ggtitle("Cross-links events distribution -% target in unique regions ") +
+  ylab("xlink events %") + 
+  theme_classic()
+
+xlink.unique.region.chr.perc.model
+
+```
+
+
+
+
+
+```{r}
+chr.multiple.region.counts.li =list()
+for (i in 1:length(main.chr.li)){
+ chr.multiple.region.counts.li[[i]]<-main.chr.li[[i]] %>% add_count(gene_name,region) %>% 
+  filter(n > 1) %>% group_by(region) %>% summarize(n=n()) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.multiple.region.counts.li[[i]]$sample <- sample
+}
+chr.multiple.region.counts.df<-do.call(rbind,chr.multiple.region.counts.li) %>% as.data.frame()#convert back to df to plot
+
+
+chr.multiple.region.counts.df<-left_join(chr.multiple.region.counts.df,metadata,by=c("sample" = "meta_id"))
+
+
+#reorder levels as samples order
+chr.multiple.region.counts.df$sample <- factor(chr.multiple.region.counts.df$sample , levels=unique(chr.multiple.region.counts.df$sample ))
+
+
+chr.multiple.region.counts.df<-chr.multiple.region.counts.df%>% as.data.frame()
+
+
+chr.multiple.model.region.df<-chr.multiple.region.counts.df %>% group_by(model,region) %>% 
+   summarize(n=sum(n)) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+
+
+
+```
+
+```{r}
+xlink.multiple.region.chr<-ggplot(chr.multiple.region.counts.df, aes(x = reorder_within(region, -n, sample), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+xlink.multiple.region.chr 
+ggsave(xlink.multiple.region.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.multiple.region.chr.png", height = 8, width = 9)
+
+
+xlink.multiple.region.chr.perc.model<-ggplot(chr.multiple.model.region.df,aes(x = region, y = perc,fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  #scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+   theme(legend.position="none")+
+  ggtitle("Cross-links events distribution -% target in multiple regions ") +
+  ylab("xlink events %") + 
+  theme_classic()
+
+xlink.multiple.region.chr.perc.model
+
+#position = position_dodge(0.5), width=0.5
+
+```
+
+## CROSS-LINKS DISTRIBUTION ACROSS GENOMIC REGIONS 
+
+```{r}
+#CHR - counts (or number of xlinks) for each region------------------
+chr.region.counts.li =list()
+for (i in 1:length(main.chr.li)){
+  chr.region.counts.li[[i]]<-main.chr.li[[i]] %>% group_by(region) %>% summarize(n=n()) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.region.counts.li[[i]]$sample <- sample
+}
+chr.region.counts.df<-do.call(rbind,chr.region.counts.li) %>% as.data.frame()#convert back to df to plot
+
+chr.region.counts.df<-left_join(chr.region.counts.df,metadata,by=c("sample" = "meta_id"))
+
+#reorder levels as samples order
+chr.region.counts.df$sample <- factor(chr.region.counts.df$sample , levels=unique(chr.region.counts.df$sample ))
+
+
+chr.region.model.region.df<-chr.region.counts.df %>% group_by(model,region) %>% 
+   summarize(n=sum(n)) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+
+```
+
+```{r, fig.width = 7, fig.height = 7}
+
+xlink.region.chr<-ggplot(chr.region.counts.df, aes(x = reorder_within(region, -n, sample), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+  #    
+xlink.region.chr
+ggsave(xlink.region.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.region.chr.png", height = 8, width = 9)
+
+xlink.region.chr.perc<-ggplot(chr.region.counts.df, aes(x = reorder_within(region, -perc,sample), y = perc, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution -% ") +
+  ylab("xlink events %") + 
+  theme_classic()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+xlink.region.chr.perc
+ggsave(xlink.region.chr.perc, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.region.chr.perc.png", height = 8, width = 9)
+
+
+
+```
+
+```{r}
+
+xlink.region.chr.perc.model<-ggplot(chr.region.model.region.df,aes(x = region, y = perc,fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  #scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+   theme(legend.position="none")+
+  ggtitle("Cross-links events distribution -% ") +
+  ylab("xlink events %") + 
+  theme_classic()
+
+xlink.region.chr.perc.model
+
+
+unique(chr.region.model.region.df$model)
+
+```
+
+
+
+```{r}
+p<-ggpubr::ggarrange(xlink.unique.region.chr.perc.model, 
+                     xlink.multiple.region.chr.perc.model,
+                     xlink.region.chr.perc.model, # list of plots
+                  common.legend = T, # COMMON LEGEND
+                  legend = "right", # legend position
+                  align = "hv", # Align them both, horizontal and vertical
+                  nrow = 3)  # number of rows
+p
+```
+
+
+
+## NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE 
+
+library(g.data)
+```{r}
+
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",]
+
+chr.region.counts.df.norm<-left_join(chr.region.counts.df, df.dedup.out.lib, by = "sample")
+chr.region.counts.df.norm<-chr.region.counts.df.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+chr.region.counts.df.norm<-chr.region.counts.df.norm %>% group_by(sample) %>% mutate(perc.norm = n.norm * 100/ sum(n.norm)) %>% arrange( .,desc(n.norm)) 
+
+
+#reorder levels as samples order
+
+chr.region.counts.df.norm$sample<-factor(chr.region.counts.df.norm$sample,levels=unique(chr.region.counts.df$sample))
+
+
+chr.region.model.region.norm.df<-chr.region.counts.df.norm %>% group_by(model,region) %>% 
+   summarize(n.normal=sum(n.norm)) %>%  mutate(perc = n.normal * 100/ sum(n.normal)) %>% arrange( .,desc(n.normal))
+
+
+```
+
+
+
+
+
+
+
+
+```{r, fig.width = 7, fig.height = 7}
+
+xlink.region.chr.norm<-ggplot(chr.region.counts.df.norm, aes(x = reorder_within(region, -n.norm, sample), y = n.norm, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution -library size normalised") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+  #    
+
+xlink.region.chr.norm.perc<-ggplot(chr.region.counts.df.norm, aes(x = reorder_within(region, -perc, sample), y = perc, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution -library size normalised") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+  #   
+xlink.region.chr.norm.perc
+
+
+```
+
+
+
+```{r}
+xlink.region.chr.perc.norm.model<-ggplot(chr.region.model.region.norm.df,aes(x = region, y = perc,fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  #scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+   theme(legend.position="none")+
+  ggtitle("Cross-links events distribution % -library size normalised ") +
+  ylab("xlink events %") + 
+  theme_classic()
+
+xlink.region.chr.perc.norm.model
+
+```
+
+
+
+
+### CROSS-LINKS DISTRIBUTION PER BIO-TYPE /LIBRARY SIZE NORMALISATION
+### SUBSET XLINK WITH A SINGLE REGION 
+```{r}
+chr.biotype.counts.li =list()
+for (i in 1:length(main.chr.li)){
+  chr.biotype.counts.li[[i]]<-main.chr.li[[i]] %>% group_by(biotype) %>% summarize(n=n()) %>%  mutate(perc = n * 100/ sum(n)) %>% arrange( .,desc(n)) 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.biotype.counts.li[[i]]$sample <- sample
+}
+
+chr.biotype.counts.df<-do.call(rbind,chr.biotype.counts.li) %>% as.data.frame()#convert back to df to plot
+
+chr.biotype.counts.df<-left_join(chr.biotype.counts.df,metadata,by=c("sample" = "meta_id"))
+
+##LIBRARY SIZE NORMALISED-------
+
+biotype.counts.df.norm<-left_join(chr.biotype.counts.df, df.dedup.out.lib, by = "sample")
+biotype.counts.df.norm<-biotype.counts.df.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+#reorder levels as samples order
+biotype.counts.df.norm$sample <- factor(biotype.counts.df.norm$sample , levels=unique(biotype.counts.df.norm$sample ))
+
+
+biotype.counts.df.norm.filt <-biotype.counts.df.norm[-grep(",",biotype.counts.df.norm$biotype),]#filter out double annotation 
+
+biotype.counts.df.norm.filt.genes<-biotype.counts.df.norm.filt %>% group_by(sample) %>%  mutate(perc.norm = n.norm * 100/ sum(n.norm)) %>% arrange( .,desc(n.norm)) 
+
+biotype.counts.df.norm.filt.genes$biotype[is.na(biotype.counts.df.norm.filt.genes$biotype)] <- "NA"
+biotype.counts.df.norm.filt.genes$biotype<-gsub("translated_unprocessed_pseudogene","unprocessed_pseudogene",biotype.counts.df.norm.filt.genes$biotype)
+
+biotype.counts.df.filt.norm.model<-biotype.counts.df.norm.filt.genes %>% group_by(model,biotype) %>% summarize(n.norm=sum(n.norm)) %>%  mutate(perc.norm = n.norm * 100/ sum(n.norm)) %>% arrange( .,desc(n.norm)) 
+
+biotype.counts.df.filt.norm.model$biotype[is.na(biotype.counts.df.filt.norm.model$biotype)] <- "NA"
+biotype.counts.df.filt.norm.model$biotype<-as.factor(biotype.counts.df.filt.norm.model$biotype)
+
+
+
+biotype.filt.srna.model<-biotype.counts.df.filt.norm.model %>% filter(biotype != "NA", biotype !="pre-mRNA",biotype !="mRNA",biotype !="lncRNA")
+
+
+```
+
+```{r, fig.width = 7, fig.height = 7}
+
+
+
+unique(chr.biotype.counts.df.filt$biotype)
+
+
+xlink.biotype.chr<-ggplot(biotype.counts.df.norm.filt.genes, aes(x = reorder_within(biotype, -n.norm, sample), y = n.norm, fill=biotype)) + geom_bar(stat = "identity",color="black") +
+  scale_color_manual(values=mypal.biotype) +
+  scale_fill_manual(values=alpha(c(mypal.biotype))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution") +
+  ylab("xlink events counts") + 
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+         axis.ticks.x=element_blank()) #+
+  # theme(strip.background =element_rect(fill= c("black")))+
+  # theme(strip.text = element_text(colour = 'white'))
+  #    
+xlink.biotype.chr
+
+
+xlink.biotype.chr.perc<-ggplot(biotype.counts.df.norm.filt.genes, aes(x = reorder_within(biotype, -perc.norm,sample), y = perc, fill=biotype)) +
+  geom_bar(stat = "identity",color="black") +
+ scale_color_manual(values=mypal.biotype) +
+  scale_fill_manual(values=alpha(c(mypal.biotype))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution -% of biotypes (library size normalised)") +
+  ylab("xlink events %") +
+    theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+xlink.biotype.chr.perc
+
+xlink.biotype.chr.perc<-ggplot(biotype.counts.df.norm.filt.genes, aes(x = reorder_within(biotype, -perc.norm,sample), y = perc, fill=biotype)) +
+  geom_bar(stat = "identity",color="black") +
+ scale_color_manual(values=mypal.biotype) +
+  scale_fill_manual(values=alpha(c(mypal.biotype))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution -% of biotypes (library size normalised)") +
+  ylab("xlink events %") +
+    theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+xlink.biotype.chr.perc
+
+```
+
+
+```{r}
+
+xlink.biotype.chr.perc.model<-ggplot(biotype.counts.df.filt.norm.model,aes(x = biotype, y = perc.norm, fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+  ggtitle("Cross-links events distribution -% of biotype (library size normalised)") +
+  theme(legend.position="none")+
+  ylab("xlink events %") + 
+  theme_classic()+
+  theme(axis.text.x=element_text(size=rel(1),angle = 45, vjust = 0.8, hjust=0.5))
+xlink.biotype.chr.perc.model
+
+srna.xlink.biotype.chr.perc.model<-ggplot(biotype.filt.srna.model,aes(x = biotype, y = perc.norm, fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge(),colour="black") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+  ggtitle("Cross-links events distribution -% of biotype (library size normalised)") +
+  theme(legend.position="none")+
+  ylab("xlink events %") + 
+  theme_classic()+
+  theme(axis.text.x=element_text(size=rel(1),angle = 45, vjust = 0.8, hjust=0.5))
+srna.xlink.biotype.chr.perc.model
+
+
+```
+
+
+
+
+
+#### CROSS-LINK DISTRIBUTION ACROSS THE GENOME
+
+```{r}
+#=============================================================================
+#genome level xlinks counts/region per chromosomes-------------------------------------- 
+
+#counts (or number of xlinks) for each chromosome------------------
+main.xlink.genome.li =list()
+for (i in 1:length(main.li)){
+  main.xlink.genome.li[[i]]<-main.li[[i]] %>%  group_by(seqname,region) %>% summarize(n=n()) %>% arrange( .,desc(seqname))
+  sample<-as.character(names(main.li[i])) # Create a new vector with sample names
+  main.xlink.genome.li[[i]]$sample <- sample
+}
+
+main.xlink.genome.df<-do.call(rbind,main.xlink.genome.li) #convert back to df to plot
+main.xlink.genome.df<-left_join(main.xlink.genome.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+main.xlink.genome.df$sample <- factor(main.xlink.genome.df$sample , levels=unique(main.xlink.genome.df$sample ))
+
+
+
+#CHR - counts (or number of xlinks) for each chromosome------------------
+chr.xlink.genome.li =list()
+for (i in 1:length(main.chr.li)){
+  chr.xlink.genome.li[[i]]<-main.chr.li[[i]] %>% group_by(seqname,region) %>% summarize(n=n()) %>% arrange( .,desc(seqname))
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.xlink.genome.li[[i]]$sample <- sample
+}
+
+chr.xlink.genome.df<-do.call(rbind,chr.xlink.genome.li) #convert back to df to plot
+chr.xlink.genome.df<-left_join(chr.xlink.genome.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+chr.xlink.genome.df$sample <- factor(chr.xlink.genome.df$sample , levels=unique(chr.xlink.genome.df$sample ))
+
+```
+
+
+```{r,fig.width = 7, fig.height = 7}
+
+#xlinks counts at genome level plots--------------------------------------
+# xlink.events.xlink.genome.main<-ggplot(main.xlink.genome.df, aes(x = reorder(seqname,n), y = n, fill=region)) + 
+#   geom_bar(stat = "identity") +
+#   xlab("genes") +
+#   facet_wrap(~sample + model,scales = "free") +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   ggtitle("Cross-links xlink distribution across the genome") +
+#   ylab("events counts") + 
+#   theme_classic()+
+#   scale_color_manual(values=mypal.region) +
+#   scale_fill_manual(values=alpha(c(mypal.region))) +
+#   coord_flip()
+# ggsave(xlink.events.xlink.genome.main, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.events.xlink.genome.main.png", height = 11, width = 11)
+
+
+
+xlink.events.xlink.genome.chr<-ggplot(chr.xlink.genome.df, aes(x = reorder(seqname,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  xlab("genes") +
+  facet_wrap(~sample + model,scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links xlink distribution across the genome") +
+  ylab("events counts") + 
+  theme_classic()+
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  coord_flip()
+#ggsave(xlink.events.xlink.genome.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.events.xlink.genome.chr.png", height = 14, width = 14)
+xlink.events.xlink.genome.chr
+```
+
+
+
+### CROSS-LINKS SCORE DISTRIBUTION PER REGION
+```{r}
+
+score.events.gene.region.chr.li =list()
+top.score.events.gene.region.chr.li=list()
+for (i in 1:length(main.chr.li)){
+  score.events.gene.region.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(region) %>%summarize(score.region=sum(score)) %>% mutate(perc = score.region * 100/ sum(score.region)) %>% arrange( .,desc(score.region))  %>% as.data.frame()#counts (or number of scores) for each gene.region. 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  score.events.gene.region.chr.li[[i]]$sample <- sample
+  
+}
+score.events.chr.df<-do.call(rbind,score.events.gene.region.chr.li )%>% as.data.frame()#convert back to df to plot #convert back to df to plot
+score.events.chr.df<-left_join(score.events.chr.df,metadata,by=c("sample" = "meta_id"))
+
+
+#reorder levels as samples order
+score.events.chr.df$sample <- factor(score.events.chr.df$sample , levels=unique(score.events.chr.df$sample ))
+
+
+```
+
+
+
+
+
+```{r}
+#score per regions plot--------CHR---
+score.region.chr<-ggplot(score.events.chr.df, aes(x = reorder(region, -score.region), y = score.region, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Score distribution") +
+  ylab("score events counts") + 
+  theme_classic()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+score.region.chr
+ggsave(score.region.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/score.region.chr.png", height = 8, width =9)
+
+score.region.chr.perc<-ggplot(score.events.chr.df, aes(x = reorder(region, -perc), y = perc, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample + model,scales = "free") + #each facet has a different scale
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links score distribution -% ") +
+  ylab("score events %") + 
+  theme_classic()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+ggsave(score.region.chr.perc, filename = "/Users/manferg/clip_metanalysis/r-plots/score.region.chr.perc.png",  height = 8, width =9)
+
+score.region.chr.perc.model<-ggplot(score.events.chr.df,aes(x = region, y = perc, fill=model)) + 
+  geom_bar(stat = "identity",position = position_dodge()) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_color_manual(values=mypal.model) +
+  scale_fill_manual(values=alpha(c(mypal.model))) +
+  ggtitle("Cross-links score distribution -% ") +
+  ylab("score events %") +
+theme_classic()
+
+
+ggsave(score.region.chr.perc.model, filename = "/Users/manferg/clip_metanalysis/r-plots/score.region.chr.perc.model.png", height = 6, width = 6)
+
+score.region.chr.perc.model
+```
+
+
+#### score distribution across gene regions-------------------
+
+```{r}
+score.gene.total.chr.li =list()
+
+for (i in 1:length(main.chr.li)){
+  score.gene.total.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name) %>% summarize(score=sum(score)) %>% arrange( .,desc(score)) %>% as.data.frame()#counts (or number of scores) for each gene.region. 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  score.gene.total.chr.li[[i]]$sample <- sample
+  
+}
+score.gene.total.df<-do.call(rbind,score.gene.total.chr.li )%>% as.data.frame()#convert back to df to plot #convert back to df to plot
+score.gene.total.df<-left_join(score.gene.total.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+score.gene.total.df$sample <- factor(score.gene.total.df$sample , levels=unique(score.gene.total.df$sample ))
+
+
+score.gene.region.chr.li =list()
+for (i in 1:length(main.chr.li)){
+  score.gene.region.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,region) %>% summarize(score=sum(score)) %>% arrange( .,desc(score)) %>% as.data.frame()
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  score.gene.region.chr.li[[i]]$sample <- sample
+  
+}
+
+score.gene.region.chr.df<-do.call(rbind,score.gene.region.chr.li )%>% as.data.frame()
+score.gene.region.chr.df<-left_join(score.gene.region.chr.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+score.gene.region.chr.df$sample <- factor(score.gene.region.chr.df$sample , levels=unique(score.gene.region.chr.df$sample ))
+
+```
+
+
+
+```{r, fig.width = 12, fig.height = 12}
+score_sumary.li =list()
+for (i in 1:length(score.gene.total.chr.li)){
+  
+  score_sumary.li[[i]]<-left_join(score.gene.total.chr.li[[i]],score.gene.region.chr.li[[i]], by="gene_name") 
+  
+}
+
+score_summary.df<-do.call(rbind,score_sumary.li )%>% dplyr::select(-sample.y) %>% as.data.frame() 
+colnames(score_summary.df)<-c("gene_name","score_total","sample","region","score_region")
+
+
+
+score_summary.tidy<-reshape2::melt(score_summary.df,variable.name = "score_name",value.name="score")
+
+top.genes.score<-score.gene.total.df[2:10,]
+score_summary.tidy<-score_summary.tidy[score_summary.tidy$gene_name %in% top.genes.score$gene_name,]
+
+
+
+#plot of xlink events per gene/score/region #yes!
+score.regions.per.gene<-ggplot(score_summary.tidy, aes(x = reorder(gene_name, score), y = score, fill=region)) + 
+  geom_bar(stat = "identity") +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample,scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links score distribution") +
+  ylab("score counts") + 
+  theme_classic() +
+  coord_flip()
+
+ggsave(score.regions.per.gene, filename = "/Users/manferg/clip_metanalysis/r-plots/score.regions.per.gene.png", height = 10, width = 10)
+score.regions.per.gene
+
+
+
+brks <- c(0, 0.25, 0.5, 0.75, 1)
+
+score.regions.per.gene.perc<-ggplot(score_summary.tidy) +
+  geom_bar(stat = "identity", aes(x = reorder(gene_name, score), y = score, fill=region), position="fill") +
+  coord_flip() +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  facet_wrap(~sample,scales = "free") +
+  ggtitle("cross-link score distribution across gene") +
+theme_classic() +
+   scale_y_continuous(breaks = brks, labels = scales::percent(brks)) +
+theme(axis.title.y =element_blank(),legend.key.size = unit(0.5, 'cm'))
+ggsave(score.regions.per.gene.perc, filename = "/Users/manferg/clip_metanalysis/r-plots/score.regions.per.gene.perc.png", height = 6, width = 6)
+
+score.regions.per.gene.perc
+
+```
+
+
+
+```{r}
+#genome level SCORE counts/region per chromosomes-------------------------------------- 
+
+# #score for each chromosome------------------
+# main.score.genome.li =list()
+# for (i in 1:length(main.li)){
+#   main.score.genome.li[[i]]<-main.li[[i]] %>%  group_by(region,seqname) %>%summarize(score.region=sum(score)) %>% mutate(perc = score.region * 100/ sum(score.region)) %>% arrange( .,desc(score.region))  %>% as.data.frame()
+# 
+#   sample<-as.character(names(main.li[i])) # Create a new vector with sample names
+#   main.score.genome.li[[i]]$sample <- sample
+# }
+# 
+# main.score.genome.df<-do.call(rbind,main.score.genome.li) #convert back to df to plot
+
+#CHR - counts (or number of scores) for each chromosome------------------
+chr.score.genome.li =list()
+for (i in 1:length(main.chr.li)){
+  chr.score.genome.li[[i]]<-main.chr.li[[i]] %>% group_by(region,seqname) %>%summarize(score.region=sum(score)) %>% mutate(perc = score.region * 100/ sum(score.region)) %>% arrange( .,desc(score.region))  %>% as.data.frame()
+
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  chr.score.genome.li[[i]]$sample <- sample
+}
+
+chr.score.genome.df<-do.call(rbind,chr.score.genome.li) #convert back to df to plot
+```
+
+
+
+```{r, fig.width = 14, fig.height = 14}
+#score counts at genome level plots--------------------------------------
+
+# 
+# xlink.events.score.genome.main<-ggplot(main.score.genome.df, aes(x = reorder(seqname,score), y = score, fill=region)) + 
+#   geom_bar(stat = "identity") +
+#   xlab("genes") +
+#   facet_wrap(~sample,scales = "free") +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   ggtitle("Cross-links score distribution across the genome") +
+#   ylab("events counts") + 
+#   theme_classic()+
+#   scale_color_manual(values=mypal.region) +
+#   scale_fill_manual(values=alpha(c(mypal.region))) +
+#   coord_flip()
+
+
+xlink.events.score.genome.chr<-ggplot(chr.score.genome.df, aes(x = reorder(seqname,score.region), y = score.region, fill=region)) + 
+  geom_bar(stat = "identity") +
+  xlab("genes") +
+  facet_wrap(~sample,scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links score distribution across the genome") +
+  ylab("events counts") + 
+  coord_flip()+
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme_classic()
+ggsave(xlink.events.score.genome.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.events.score.genome.chr.png", height = 14, width = 14)
+
+xlink.events.score.genome.chr
+
+
+```
+
+### CROSS-LINK EVENTS PER GENE 
+```{r}
+#counts (or number of xlinks) for each gene/region------------------CHR
+xlink.events.gene.region.chr.li =list()
+top.xlink.events.gene.region.chr.li=list()
+for (i in 1:length(main.chr.li)){
+  xlink.events.gene.region.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,region,GC,length) %>% summarize(n=n()) %>% arrange( .,desc(n)) %>% as.data.frame()#counts (or number of xlinks) for each gene.region. 
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  xlink.events.gene.region.chr.li[[i]]$sample <- sample
+  top.xlink.events.gene.region.chr.li[[i]]<-xlink.events.gene.region.chr.li[[i]][2:10,]  #exclude "None" and list top 20 gene.region.s
+  top.xlink.events.gene.region.chr.li[[i]]$gene_name <- factor(top.xlink.events.gene.region.chr.li[[i]]$gene_name , levels = top.xlink.events.gene.region.chr.li[[i]]$gene_name[order(top.xlink.events.gene.region.chr.li[[i]]$n)])
+
+}
+
+sapply(xlink.events.gene.region.chr.li, nrow)#different number of genes in each datasets
+xlink.events.chr.df<-do.call(rbind,xlink.events.gene.region.chr.li) #convert back to df to plot
+
+
+
+#reorder levels as samples order
+xlink.events.chr.df$sample <- factor(xlink.events.chr.df$sample , levels=unique(xlink.events.chr.df$sample ))
+
+
+top.xlink.events.chr.df<-do.call(rbind,top.xlink.events.gene.region.chr.li)
+top.xlink.events.chr.df<-left_join(top.xlink.events.chr.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+top.xlink.events.chr.df$sample <- factor(top.xlink.events.chr.df$sample , levels=unique(top.xlink.events.chr.df$sample ))
+
+#data exploration xlink df----------
+
+dim(xlink.events.chr.df) #390292
+
+length(unique(xlink.events.chr.df$gene_name)) #35248 unique gene_name
+
+xlink.events.unique.gene<-xlink.events.chr.df %>% group_by(gene_name,sample) %>% summarize(n=sum(n)) %>% arrange( .,desc(n)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+dim(xlink.events.unique.gene)
+
+
+#p<-xlink.events.chr.df %>% filter(sample == "grot_293fl_1") %>% filter(gene_name == "GSE1") %>% summarize(n=sum(n))
+#p<-xlink.events.unique.gene %>% filter(sample == "grot_293fl_1") %>% filter(gene_name == "GSE1")
+
+```
+
+
+
+
+
+
+
+
+
+
+High and Low band Healthy Brain sample 
+```{r}
+#PROPRTION OF HIGH AND LOW BAND CDNA TARGET IN SH-SY5Y COMPARTMENTS
+high_low<-score.xlink.df %>% filter(sample == "tollervey_brain6.high" | sample == "tollervey_brain7.low")
+
+## NORMALISE SCORE ON LIBRARY SIZE 
+
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",]
+
+high_low.norm<-left_join(high_low, df.dedup.out.lib, by = "sample")
+high_low.norm<-high_low.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(score.norm = score/ls.factor)
+
+high_low.norm<-high_low.norm %>% group_by(sample,gene_name) %>% summarize(score.gene.norm=sum(score.norm)) %>% mutate(perc.norm = score.gene.norm * 100/ sum(score.gene.norm)) %>% arrange( .,desc(score.gene.norm)) 
+
+dim(high_low.norm)
+
+high_low.ann<-high_low %>% dplyr::select(gene_name,UGhex,GU,length) %>% distinct()
+
+
+dim(high_low.ann)
+
+
+high_low_perc<-dcast(high_low.norm, gene_name ~ sample) 
+high_low_perc<-inner_join(high_low_perc,high_low.ann, by= "gene_name")
+high_low_perc[is.na(high_low_perc)] <- 0 #transform NA values in 0 
+
+dim(high_low_perc)
+
+
+
+scaterplot<-ggplot(high_low_perc) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  geom_text(data=high_low_perc, size =3, vjust = 2, aes(x=tollervey_brain6.high,y=tollervey_brain7.low,label=gene_name)) +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  xlim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) + 
+  ylim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+
+
+scaterplot<-ggplot(high_low_perc) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  xlim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) + 
+  ylim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) +
+  theme_bw()
+
+scaterplot<-ggplot(high_low_perc) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+
+## without Library size normalisation
+
+high_low<-score.xlink.df %>% filter(sample == "tollervey_brain6.high" | sample == "tollervey_brain7.low")
+high_low.perc<-high_low %>% group_by(sample,gene_name) %>% summarize(score.gene=sum(score)) %>% mutate(perc = score.gene * 100/ sum(score.gene)) %>% arrange( .,desc(score.gene)) 
+
+
+
+high_low.ann<-high_low %>% dplyr::select(gene_name,UGhex,GU,length) %>% distinct()
+
+
+dim(high_low.ann)
+
+
+high_low.perc<-dcast(high_low.perc, gene_name ~ sample) 
+high_low.perc<-inner_join(high_low.perc,high_low.ann, by= "gene_name")
+high_low.perc[is.na(high_low.perc)] <- 0 #transform NA values in 0 
+
+dim(high_low.perc)
+
+
+
+scaterplot<-ggplot(high_low.perc) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  geom_text(data=high_low.perc, size =3, vjust = 2, aes(x=tollervey_brain6.high,y=tollervey_brain7.low,label=gene_name)) +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  xlim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) + 
+  ylim(range(c(high_low_perc$tollervey_brain6.high, high_low_perc$tollervey_brain7.low))) +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+```
+
+
+```{r}
+library(VennDiagram)
+library(ggVennDiagram)
+library(gplots)
+
+# pass a list of genes names for each group of the diagram 
+brain6.high.genes.ann<-xlink.events.chr.df %>% filter(sample == "tollervey_brain6.high")  %>% filter(n > 0) %>%
+filter(gene_name != "None") %>%
+ dplyr::select( .,gene_name,region,n,GU,length)
+
+brain6.high.genes.ann<-brain6.high.genes.ann[-1,]
+brain7.low.genes.ann<-xlink.events.chr.df %>% filter(sample == "tollervey_brain7.low")  %>% filter(n > 0) %>% 
+  filter(gene_name != "None") %>%
+ dplyr::select( .,gene_name,region,n,GU,length)
+brain7.low.genes.ann<-brain7.low.genes.ann[-1,]
+  
+
+brain6.high.genes<-xlink.events.unique.gene %>% filter(sample == "tollervey_brain6.high")  %>%
+  filter(n > 0) %>%
+ filter(gene_name != "None")%>% 
+  dplyr::select( .,gene_name)
+
+
+
+brain7.low.genes<-xlink.events.unique.gene %>% 
+  filter(sample == "tollervey_brain7.low")  %>% 
+  filter(n > 0) %>% 
+  filter(gene_name != "None") %>% 
+  dplyr::select( .,gene_name)
+
+
+
+colors<-c("#6bffab","#c3db0f")
+
+# Make Venn diagram from list of groups
+brain6.high.genes$gene_name<-as.character(brain6.high.genes$gene_name)
+brain6.high.genes<-brain6.high.genes[-1,]
+brain7.low.genes$gene_name<-as.character(brain7.low.genes$gene_name)
+brain7.low.genes<-brain7.low.genes[-1,]
+
+x = list(brain6.high.genes, brain7.low.genes)
+names(x)<-c("high_band","low_band")
+
+
+
+p<-ggVennDiagram(x, 
+                 category.names = names(x), label_alpha = 0 
+                 ,lty="dashed",color="black") + ggplot2::scale_fill_gradient(low="white",high = "light blue") + scale_color_brewer(palette = "Paired")
+
+
+#extract intersection attributes 
+ItemsList <- venn(x, show.plot = FALSE)
+
+lengths(attributes(ItemsList)$intersections)
+attributes(ItemsList)$intersections
+
+
+library(nVennR)
+library(rsvg)
+library(grImport2)
+myV<-plotVenn(list(brain6.high.genes, brain7.low.genes), sNames=c("TDP-43 high band", "TDP-43 low band"),outFile='~/myv.svg',systemShow = TRUE,labelRegions=F,setColors=c('#ff5e7a', '#36efeb'),fontScale=1.5, opacity=0.2, borderWidth=2) 
+showSVG(myV, outFile = "myv.svg")
+
+
+intersects <- listVennRegions(myV)
+names(intersects)<-c("low_band","high_band","shared")
+lengths(intersects)
+      # pull lists together
+  tidy_intersect <- plyr::ldply(intersects, cbind)
+  
+     
+     library(gprofiler2)
+     
+     #go-term
+  multi_gp_link = gost(listVennRegions(myV), as_short_link = TRUE)
+
+  length(intersects$low_band)
+  
+
+l<- brain7.low.genes.ann %>% filter(gene_name%in% intersects$low_band) %>% mutate(band ="low")
+dim(l) 
+l.top<-l[1:30,]
+
+h<-brain6.high.genes.ann %>% filter(gene_name%in% intersects$high_band) %>% mutate(band ="high")
+dim(h)
+h.top<-h[1:30,]
+
+t<-rbind(l,h) 
+as.factor(t$band)
+
+
+
+l.bands.region<-ggplot(l.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 targets lower band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+l.density<-ggplot(t, aes(x = log2(length), fill=band)) + 
+    geom_density(alpha=1/5) +
+  xlab("log2 transcript length") +
+  theme_bw()
+l.density
+
+l.density<-ggplot(t, aes(x = log2(GC+1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+
+l.density<-ggplot(t, aes(x = log10(n +1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+h.bands.region<-ggplot(h.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+h.bands.region<-ggplot(h, aes(x = reorder(gene_name,n), y = n, fill=length)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+    scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+
+
+```
+
+High and Low band
+
+High: SY5Y1a TDP-43_SH-SY5Y_High
+Low: SY5Y1b TDP-43_SH-SY5Y_High
+
+```{r}
+# pass a list of genes names for each group of the diagram 
+SY5Y1a.ann.high<- xlink.events.chr.df %>% filter(sample == "tollervey_SHSY5Y1a.high")  %>% filter(n > 0) %>% filter(gene_name != "None") %>% dplyr::select( .,gene_name,region,n,GC,length)
+SY5Y1a.ann.high<-SY5Y1a.ann.high[-1,]
+SY5Y1b.ann.low<-xlink.events.chr.df %>% filter(sample == "tollervey_SHSY5Y1b.low")  %>% filter(n > 0) %>% filter(gene_name != "None") %>% dplyr::select( .,gene_name,region,n,GC,length)
+SY5Y1b.ann.low<-SY5Y1b.ann.low[-1,]
+  
+
+SY5Y1a.high<-xlink.events.unique.gene %>% filter(sample == "tollervey_SHSY5Y1a.high")  %>% filter(n > 0) %>% filter(gene_name != "None") %>% dplyr::select( .,gene_name)
+SY5Y1a.high<-SY5Y1a.high[-1,]
+SY5Y1b.low<-xlink.events.unique.gene %>% filter(sample == "tollervey_SHSY5Y1b.low")  %>% filter(n > 0) %>% filter(gene_name != "None") %>% dplyr::select( .,gene_name)
+SY5Y1b.low<-SY5Y1b.low[-1,]
+
+
+colors<-c("#6bffab","#c3db0f")
+
+# Make Venn diagram from list of groups
+x = list(SY5Y1a.high, SY5Y1b.low)
+names(x)<-c("high_band","low_band")
+
+p<-ggVennDiagram(x, 
+                 category.names = names(x), label_alpha = 0 
+                 ,lty="dashed",color="black") + ggplot2::scale_fill_gradient(low="white",high = "light blue") + scale_color_brewer(palette = "Paired")
+
+
+#extract intersection attributes 
+ItemsList <- venn(x, show.plot = FALSE)
+
+lengths(attributes(ItemsList)$intersections)
+attributes(ItemsList)$intersections
+
+
+library(nVennR)
+library(rsvg)
+library(grImport2)
+myV<-plotVenn(list(SY5Y1a.high,SY5Y1b.low), sNames=c("TDP-43 high band", "TDP-43 low band"),outFile='~/myv.svg',systemShow = TRUE,labelRegions=F,setColors=c('#ff5e7a', '#36efeb'),fontScale=1.5, opacity=0.2, borderWidth=2) 
+showSVG(myV, outFile = "myv.svg")
+
+#venn Brain and SY5Y1
+library(nVennR)
+library(rsvg)
+library(grImport2)
+myV<-plotVenn(list(brain6.high.genes, brain7.low.genes,SY5Y1a.high,SY5Y1b.low), sNames=c("TDP-43 high band brain", "TDP-43 low band brain","TDP-43 high band SY5Y1", "TDP-43 low band SY5Y1" ),outFile='~/myv.svg',systemShow = TRUE,labelRegions=F,fontScale=1.5, opacity=0.2, borderWidth=2) 
+showSVG(myV, outFile = "myv.svg")
+
+x = list(brain6.high.genes, brain7.low.genes,SY5Y1a.high, SY5Y1b.low)
+names(x)<-c("TDP-43 high band brain", "TDP-43 low band brain","TDP-43 high band SY5Y1", "TDP-43 LOW band SY5Y1")
+
+p<-ggVennDiagram(x, 
+                 category.names = names(x), label_alpha = 0 
+                 ,lty="dashed",color="black") + ggplot2::scale_fill_gradient(low="white",high = "light blue") + scale_color_brewer(palette = "Paired")
+
+
+
+
+
+intersects <- listVennRegions(myV)
+names(intersects)<-c("low_band","high_band","shared")
+lengths(intersects)
+      # pull lists together
+  tidy_intersect <- plyr::ldply(intersects, cbind)
+  
+  
+  
+  
+  
+  
+  
+     
+     library(gprofiler2)
+     
+     #go-term
+  multi_gp_link = gost(listVennRegions(myV), as_short_link = TRUE)
+
+  length(intersects$low_band)
+  
+
+l<- SY5Y1b.ann.low %>% filter(gene_name%in% intersects$low_band) %>% mutate(band ="low")
+dim(l) 
+l.top<-l[1:30,]
+
+h<-SY5Y1a.ann.high %>% filter(gene_name%in% intersects$high_band) %>% mutate(band ="high")
+dim(h)
+h.top<-h[1:30,]
+
+t<-rbind(l,h) 
+as.factor(t$band)
+
+
+
+l.bands.region<-ggplot(l.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 30 TDP-43 targets lower band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+l.density<-ggplot(t, aes(x = log2(length), fill=band)) + 
+    geom_density(alpha=1/5) +
+  xlab("log2 transcript length") +
+  theme_bw()
+l.density
+
+l.density<-ggplot(t, aes(x = log2(GC+1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+
+l.density<-ggplot(t, aes(x = log10(n +1), fill=band)) + 
+    geom_density(alpha=1/5) +
+  theme_bw()
+l.density
+
+h.bands.region<-ggplot(h.top, aes(x = reorder(gene_name,n), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+h.bands.region<-ggplot(h, aes(x = reorder(gene_name,n), y = n, fill=length)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+    scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 20 TDP-43 targets higher band") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+
+
+```
+
+
+
+Healthy and FLTD Brain CDNA proportion
+```{r}
+#PROPRTION OF Healthy and FLTD Brain CDNA proportion
+
+health<-score.xlink.df %>% filter(sample == "tollervey_brain6.high" | sample == "tollervey_brain7.low" | sample == "tollervey_brain1" |  sample == "tollervey_brain2")
+ftld<-score.xlink.df %>% filter(sample == "tollervey_brain3" |  sample == "tollervey_brain4" | sample == "tollervey_brain5")
+
+health<-score.xlink.df %>% filter( sample == "tollervey_brain7.low" |  sample == "tollervey_brain2")
+ftld<-score.xlink.df %>% filter(sample == "tollervey_brain3" |  sample == "tollervey_brain4" | sample == "tollervey_brain5")
+
+df.dedup.out.lib<-df.dedup.in.out[df.dedup.in.out$read == "output_reads",]
+## NORMALISE SCORE ON LIBRARY SIZE 
+health.norm<-left_join(health, df.dedup.out.lib, by = "sample")
+health.norm<-health.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(score.norm = score/ls.factor)
+
+ftld.norm<-left_join(ftld, df.dedup.out.lib, by = "sample")
+ftld.norm<-ftld.norm %>% mutate(ls.factor=count/1e+06) %>% mutate(score.norm = score/ls.factor)
+
+ftld.norm.region<-ftld.norm %>% group_by(gene_name,region) %>% summarize(score.total.norm.ftld=mean(score.norm))
+ftld.norm.gene<-ftld.norm %>% group_by(gene_name) %>% summarize(score.total.norm.ftld=mean(score.norm))
+
+health.norm.region<-health.norm %>% group_by(gene_name,region) %>% summarize(score.total.norm.health=mean(score.norm))
+health.norm.gene<-health.norm %>% group_by(gene_name) %>% summarize(score.total.norm.health=mean(score.norm))
+
+
+```
+
+```{r}
+
+#merge and transform NA to 0 
+health_ftld<-left_join(ftld.norm.gene,health.norm.gene, by="gene_name")
+health_ftld[is.na(health_ftld)] <- 0 #transform NA values in 0 
+
+
+tot<-colSums(health_ftld[,-1]) %>% as.data.frame() %>% colSums(.,) %>% as.vector()
+
+
+health_ftld<-health_ftld %>%
+    mutate(perc.ftld=score.total.norm.ftld * 100/tot) %>% mutate(perc.health=score.total.norm.health* 100/tot)
+
+
+health_ftld_filt<-arrange(health_ftld,desc(perc.ftld)) %>% filter(perc.ftld > 0.1 | perc.health > 0.1)
+
+
+#Unpaired t-test -The unpaired two-samples t-test is used to compare the mean of two independent groups. we have two unrelated (i.e., independent or unpaired) groups of samples. Therefore, it’s possible to use an independent t-test to evaluate whether the proportion of cDNAs are different.
+#un-equal variance 
+
+library(ggpubr)
+health_ftld.df <- health_ftld %>% dplyr::select(gene_name,perc.ftld,perc.health )
+dim(health_ftld.df)
+
+t<-t.test(health_ftld_filt$perc.ftld ,health_ftld_filt$perc.health, alternative = "less", var.equal = FALSE)
+
+
+
+````
+
+
+
+
+
+
+scaterplot<-ggplot(health_ftld) +
+  geom_point(aes(x=perc.health,y=perc.ftld),size=1) + 
+ geom_text(data=health_ftld, size =3, vjust = 2, aes(x=perc.health,y=perc.ftld,label=gene_name)) +
+  ggtitle("TDP-43 interaction in Healthy and FTLD brain") +
+  ylab("proportion of FTLD cDNAs (%)") +
+  xlim(range(c(health_ftld$perc.health, health_ftld$perc.ftld))) + 
+  ylim(range(c(health_ftld$perc.health, health_ftld$perc.ftld))) +
+  xlab("proportion of Healthy cDNAs (%)") +
+  theme_bw()
+
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+scaterplot<-ggplot(health_ftld) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  geom_text(data=health_ftld_perc, size =3, vjust = 2, aes(x=tollervey_brain6.high,y=tollervey_brain7.low,label=gene_name)) +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  xlim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) + 
+  ylim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+
+
+scaterplot<-ggplot(health_ftld) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  xlim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) + 
+  ylim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) +
+  theme_bw()
+
+scaterplot<-ggplot(health_ftld) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+
+## without Library size normalisation
+
+health_ftld<-score.xlink.df.filt %>% filter(sample == "tollervey_brain6.high" | sample == "tollervey_brain7.low")
+health_ftld.perc<-health_ftld %>% group_by(sample,gene_name) %>% summarize(score.gene=sum(score)) %>% mutate(perc = score.gene * 100/ sum(score.gene)) %>% arrange( .,desc(score.gene)) 
+
+
+
+health_ftld.ann<-health_ftld %>% dplyr::select(gene_name,UGhex,GU,length) %>% distinct()
+
+
+dim(health_ftld.ann)
+
+
+health_ftld.perc<-dcast(health_ftld.perc, gene_name ~ sample) 
+health_ftld.perc<-inner_join(health_ftld.perc,health_ftld.ann, by= "gene_name")
+health_ftld.perc[is.na(health_ftld.perc)] <- 0 #transform NA values in 0 
+
+dim(health_ftld.perc)
+
+
+
+scaterplot<-ggplot(health_ftld.perc) +
+  geom_point(aes(x=tollervey_brain6.high,y=tollervey_brain7.low,fill=length,colour=length),size=1) + 
+scale_fill_gradient(low = "#0080ff", high = "#99000d") +
+  scale_colour_gradient(low = "#0080ff", high = "#99000d") +
+  geom_text(data=health_ftld_perc, size =3, vjust = 2, aes(x=tollervey_brain6.high,y=tollervey_brain7.low,label=gene_name)) +
+  ggtitle("TDP-43 interaction in 'low' and 'high' band") +
+  xlab("proportion of 'high band' cDNAs (%)") +
+  xlim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) + 
+  ylim(range(c(health_ftld_perc$tollervey_brain6.high, health_ftld_perc$tollervey_brain7.low))) +
+  ylab("proportion of 'low bannd' cDNAs (%)") +
+  theme_bw()
+
+```
+
+### HEATH-MAP XLINKS PER GENE RAW XLINKS 
+
+
+UN-RANKED GENES
+NA values removed 
+```{r}
+#HEATH-MAP---------THIS HEATHMAP IS PLOTTED ON LIBRARY SIZE NORM X-LINKS
+
+#prep-data
+tidy<-xlink.events.unique.gene %>% group_by( .,sample) %>% arrange( .,desc(n),.by_group = TRUE)%>% filter( .,gene_name != "None") #arrange data.frame by sample and then within each sample order n in descending order 
+
+
+#spread.df.ranked<-spread(tidy,sample,n) %>% column_to_rownames(var="gene_name")
+#spread.df.ranked<-spread.df[tidy$gene_name,] #re-order gene names  as spread function orders genes automatically in alphabethical order. 
+
+spread.df<-spread(tidy,sample,n)
+
+
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df<-spread.df %>% na.omit() # 888 number of genes post NA omit  
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+#spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+head(spread.df)
+```
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:17])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+Re-order samples
+```{r}
+mn_reorder_idx <- match(reorder_sample_idx, colnames(matrix), nomatch = 0)
+dim(matrix)
+```
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+rownames(col_ann_df) <- colnames(matrix) # name matching
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(mat), row.names = TRUE)
+```
+
+Set sample order in matrix(doesn't matter if you cluster-unsupervised clustering)
+```{r}
+mat <- matrix[,mn_reorder_idx]
+```
+
+Heathmap raw x-links
+```{r}
+library(pheatmap)
+heathmap_raw <- pheatmap(mat,annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+library(pheatmap)
+heathmap_raw_scale <- pheatmap(mat,scale="row",annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+matrix.log2<-log2(matrix)
+```
+
+```{r}
+library(pheatmap)
+heathmap_raw_log2 <- pheatmap(matrix.log2, annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+library(pheatmap)
+heathmap_raw_log2_scale <- pheatmap(matrix.log2, scale="row",annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+matrix.pseudo.log2<-log2(matrix+1)
+```
+
+```{r}
+library(pheatmap)
+heathmap_raw_pseudo_log2 <- pheatmap(matrix.pseudo.log2, annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+```{r}
+library(pheatmap)
+heathmap_raw_pseudo_log2_scale <- pheatmap(matrix.pseudo.log2,scale="row", annotation = ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+
+
+
+### CROSS-LINK EVENTS PER GENE
+```{r, fig.width = 11, fig.height = 8}
+
+#plot of xlink events per gene------------CHR
+#plot of xlink events per gene
+# xlink.genes.chr<-ggplot(top.xlink.events.chr.df, aes(x = reorder_within(gene_name,n,sample), y = n, fill=gene_name)) + 
+#   geom_bar(stat = "identity") +
+#   scale_x_reordered() +
+#   xlab("genes") +
+#   facet_wrap(~sample + model,scales = "free") +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+#   ggtitle("Cross-links events distribution") +
+#   ylab("events counts") + 
+#   coord_flip() +
+#   theme_classic() +
+#   theme(axis.title.x=element_blank(),
+#         axis.text.x=element_blank(),
+#         axis.ticks.x=element_blank())
+# ggsave(xlink.genes.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.chr.png", height = 6, width = 6)
+# xlink.genes.chr
+
+#plot of xlink events per gene/region
+xlink.genes.region.chr<-ggplot(top.xlink.events.chr.df, aes(x = reorder_within(gene_name,n,sample), y = n, fill=region)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  facet_wrap(~sample + model,scales = "free") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 10 TDP-43 targets") +
+  ylab("events counts") + 
+  coord_flip() +
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave(xlink.genes.region.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.region.chr.png", height = 8, width = 11)
+xlink.genes.region.chr
+
+
+#plot of xlink events per gene/GC
+xlink.genes.GC.chr<-ggplot(top.xlink.events.chr.df, aes(x = reorder_within(gene_name,n,sample), y = n, fill=GC)) + 
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  facet_wrap(~sample + model,scales = "free") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution-GC content") +
+  ylab("events counts") + 
+  coord_flip() +
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave(xlink.genes.GC.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.GC.chr.png", height = 8, width = 11)
+xlink.genes.GC.chr
+
+```
+
+
+### GENE LENGHT NORMALISATION
+```{r, fig.width = 10, fig.height = 10}
+#===gene length normalisation=====#---------------
+
+xlink.events.gene.region.chr.norm.li =list()
+top.xlink.events.gene.region.chr.norm.li=list()
+xlink.chr.normalised.li=list()
+for (i in 1:length(main.chr.li)){
+  xlink.events.gene.region.chr.norm.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,region,GC,length) %>% summarize(n=n()) %>% arrange( .,desc(n)) %>% as.data.frame() #counts (or number of xlinks) for each gene.region. 
+  xlink.chr.normalised.li[[i]]<-xlink.events.gene.region.chr.norm.li[[i]] %>% mutate( .,xlink.enrichment=n/length) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame()
+  sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+  xlink.chr.normalised.li[[i]]$sample <- sample
+  top.xlink.events.gene.region.chr.norm.li[[i]]<-xlink.chr.normalised.li[[i]][1:10,]  #exclude "None" and list top 20 gene.region.s
+  top.xlink.events.gene.region.chr.norm.li[[i]]$gene_name <- factor(top.xlink.events.gene.region.chr.norm.li[[i]]$gene_name , levels = top.xlink.events.gene.region.chr.norm.li[[i]]$gene_name[order(top.xlink.events.gene.region.chr.norm.li[[i]]$xlink.enrichment)])
+  
+}
+
+xlink.chr.normalised.df<-do.call(rbind,xlink.chr.normalised.li) #convert back to df to plot
+top.xlink.events.chr.norm.df<-do.call(rbind,top.xlink.events.gene.region.chr.norm.li)
+top.xlink.events.chr.norm.df<-left_join(top.xlink.events.chr.norm.df,metadata,by=c("sample" = "meta_id"))
+#reorder levels as samples order
+top.xlink.events.chr.norm.df$sample <- factor(top.xlink.events.chr.norm.df$sample , levels=unique(top.xlink.events.chr.norm.df$sample ))
+
+
+#test
+#p<-intresected.chr.df %>% filter(sample == "grot_293fl_1") %>% filter(gene_name == "GSE1") %>% filter(region == "intron")
+#dim(p)
+
+#view(top.xlink.events.gene.region.chr.df)
+#view(xlink.events.gene.region.chr.df)
+
+
+#plot of xlink events per gene/region----LENGTH NORM-----CHR
+xlink.genes.region.norm.chr<-ggplot(top.xlink.events.chr.norm.df,aes(reorder_within(gene_name,xlink.enrichment,sample), xlink.enrichment, fill=region)) +
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  facet_wrap(~sample + model,scales = "free") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution normalised per gene length -genomic regions") +
+  ylab("events counts") +
+  coord_flip() +
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave(xlink.genes.region.norm.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.region.norm.chr.png",height = 8, width = 11)
+xlink.genes.region.norm.chr
+
+#plot of xlink events per gene/GC----LENGTH NORM-----CHR
+
+xlink.genes.GC.norm.chr<-ggplot(top.xlink.events.chr.norm.df,aes(reorder_within(gene_name,xlink.enrichment,sample), xlink.enrichment, fill=GC)) + 
+  facet_wrap(~sample + model,scales = "free") +
+  #scale_color_manual(values=mypal.region) +
+  #scale_fill_manual(values=alpha(c(mypal.region))) +
+  scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  scale_x_reordered() +
+  geom_bar(stat = "identity") +
+  xlab("genes") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Cross-links events distribution normalised per gene length-GCcontent") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()
+ggsave(xlink.genes.GC.norm.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.GC.norm.chr.png", height = 8, width = 11)
+xlink.genes.GC.norm.chr
+
+
+```
+
+## NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE AND GENE LENGHT 
+
+
+## 1) NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE
+
+Raw number of xlink events per gene 
+```{r}
+xlink.events.chr.df
+
+```
+
+Library sizes 
+```{r}
+df.dedup.out.lib
+```
+
+## 1) NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE
+```{r}
+xlink.events.chr.lb.norm.df<-left_join(xlink.events.chr.df, df.dedup.out.lib, by = "sample")
+xlink.events.chr.lb.norm.df<-xlink.events.chr.lb.norm.df %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+```
+
+## 2) NORMALISE LIBRARY SIZE NORMALISED ON LIBRARY SIZE BY GENE LENGTH (EXTRACT ENRICHED XLINK SITES) 
+```{r}
+xlink.events.gene.lb.chr.norm.df<-xlink.events.chr.lb.norm.df %>% mutate( .,xlink.enrichment=n.norm/length) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame()
+
+```
+
+
+```{r, fig.width = 8, fig.height = 8}
+
+xlink.events.gene.lb.chr.norm.li<-split(xlink.events.gene.lb.chr.norm.df,xlink.events.gene.lb.chr.norm.df$sample)
+top.xlink.events.gene.lb.chr.norm.li=list()
+
+for (i in 1:length(xlink.events.gene.lb.chr.norm.li)){
+ top.xlink.events.gene.lb.chr.norm.li[[i]]<-xlink.events.gene.lb.chr.norm.li[[i]][1:10,]  #exclude "None" and list top 20 gene.region.s
+  top.xlink.events.gene.lb.chr.norm.li[[i]]$gene_name <- factor(top.xlink.events.gene.lb.chr.norm.li[[i]]$gene_name , levels = top.xlink.events.gene.lb.chr.norm.li[[i]]$gene_name[order(top.xlink.events.gene.lb.chr.norm.li[[i]]$xlink.enrichment)])
+}
+
+
+
+top.norm.enriched.xlink.df<-do.call(rbind,top.xlink.events.gene.lb.chr.norm.li)
+top.norm.enriched.xlink.df<-left_join(top.norm.enriched.xlink.df,metadata,by=c("sample" = "meta_id"))
+factor(top.norm.enriched.xlink.df)
+#reorder levels as samples order
+top.norm.enriched.xlink.df$sample <- factor(top.norm.enriched.xlink.df$sample , levels=unique(top.norm.enriched.xlink.df$sample ))
+
+intresected.chr.df.fil
+#test
+#p<-intresected.chr.df %>% filter(sample == "grot_293fl_1") %>% filter(gene_name == "GSE1") %>% filter(region == "intron")
+#dim(p)
+
+#view(top.xlink.events.gene.region.chr.df)
+#view(xlink.events.gene.region.chr.df)
+
+
+#plot of xlink events per gene/region----LENGTH NORM-----CHR
+xlink.genes.region.lb.length.norm.chr<-ggplot(top.norm.enriched.xlink.df,aes(reorder_within(gene_name,xlink.enrichment,sample), xlink.enrichment, fill=region)) +
+  geom_bar(stat = "identity") +
+  scale_x_reordered() +
+  xlab("genes") +
+  facet_wrap(~sample + model,scales = "free") +
+  scale_color_manual(values=mypal.region) +
+  scale_fill_manual(values=alpha(c(mypal.region))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 10 TDP-43 targets - normalised on gene length and library size") +
+  ylab("events counts") +
+  coord_flip() +
+  theme_classic() +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+ggsave(xlink.genes.region.lb.length.norm.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.region.lb.length.norm.chr.png",height = 8, width = 11)
+xlink.genes.region.lb.length.norm.chr
+
+#plot of xlink events per gene/GC----LENGTH NORM-----CHR
+
+xlink.genes.region.lb.length.GC.norm.chr<-ggplot(top.norm.enriched.xlink.df,aes(reorder_within(gene_name,xlink.enrichment,sample), xlink.enrichment, fill=GC)) + 
+  facet_wrap(~sample + model,scales = "free") +
+  #scale_color_manual(values=mypal.region) +
+  #scale_fill_manual(values=alpha(c(mypal.region))) +
+  scale_fill_gradient(low = "#f7f7f7", high = "#99000d") +
+  scale_x_reordered() +
+  geom_bar(stat = "identity") +
+  xlab("genes") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("Top 10 TDP-43 targets - normalised on gene length and library size -GCcontent %") +
+  ylab("events counts") + 
+  theme_classic() +
+  coord_flip()
+ggsave(xlink.genes.region.lb.length.GC.norm.chr, filename = "/Users/manferg/clip_metanalysis/r-plots/xlink.genes.region.lb.length.GC.norm.chr.png", height = 8, width = 11)
+xlink.genes.region.lb.length.GC.norm.chr
+
+
+```
+
+HEATH-MAP Biotype filt gene length and library size nrom
+```{r}
+
+
+# #counts (or number of xlinks) for each gene/region------------------CHR
+# xlink.events.gene.biotype.chr.li =list()
+# top.xlink.events.gene.biotype.chr.li=list()
+# for (i in 1:length(main.chr.li)){
+# xlink.events.gene.biotype.chr.li[[i]]<-main.chr.li[[i]] %>% group_by(gene_name,biotype,region,GC,length) %>% summarize(n=n()) %>% arrange( .,desc(n)) %>% as.data.frame()#counts (or number of xlinks) for each gene.region. 
+#   sample<-as.character(names(main.chr.li[i])) # Create a new vector with sample names
+#  xlink.events.gene.biotype.chr.li[[i]]$sample <- sample
+# }
+# 
+# xlink.events.bio.chr.df<-do.call(rbind,xlink.events.gene.biotype.chr.li) #convert back to df to plot
+
+```
+
+
+## 1) NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE
+```{r}
+# bio.lb.norm.df<-left_join(xlink.events.bio.chr.df, df.dedup.out.lib, by = "sample")
+# bio.lb.norm.df<-bio.lb.norm.df %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+```
+
+## 2) NORMALISE LIBRARY SIZE NORMALISED ON LIBRARY SIZE BY GENE LENGTH (EXTRACT ENRICHED XLINK SITES) 
+```{r}
+# bio.lb.norm.df<-bio.lb.norm.df%>% mutate( .,xlink.enrichment=n.norm/length) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame()
+
+```
+
+Filter snRNA
+
+```{r}
+# sn.rna.lb.norm.df<-bio.lb.norm.df %>% filter(biotype == "mt_tRNA") %>% filter( .,grepl("^tollervey_brain",sample))
+```
+
+
+
+
+
+Prep data frame for Heathmap 
+
+```{r}
+
+xlink.events.unique.gene.lb.chr.norm.df<-xlink.events.gene.lb.chr.norm.df %>% group_by(gene_name,sample) %>% summarize(xlink.enrichment=sum(xlink.enrichment)) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+dim(xlink.events.unique.gene.lb.chr.norm.df)
+
+#merge healthy brain samples 6high and 7 low
+xlink.events.unique.gene.lb.chr.norm.df$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',xlink.events.unique.gene.lb.chr.norm.df$sample)
+xlink.events.unique.gene.lb.chr.norm.df<-aggregate(xlink.enrichment ~ sample + gene_name,FUN = "mean", data=xlink.events.unique.gene.lb.chr.norm.df) %>% arrange( .,desc(xlink.enrichment))
+
+tidy<-xlink.events.unique.gene.lb.chr.norm.df %>% dplyr::select(sample, gene_name,xlink.enrichment) %>% arrange( .,desc(xlink.enrichment)) %>% filter( .,gene_name != "None")
+
+ spread.df<-spread(tidy,sample,xlink.enrichment)
+ 
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df<-spread.df %>% na.omit() # 888 number of genes post NA omit  
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+#spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+head(spread.df)
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:16])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+
+```
+
+
+Heath-map annotation
+```{r}
+
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+col_ann_df<-col_ann_df[row.names(col_ann_df) != "tollervey_brain7.low", , drop = FALSE]
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+```
+
+
+Heathmap raw x-links
+```{r}
+library(pheatmap)
+heathmap_norm <- pheatmap(matrix,annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+library(pheatmap)
+heathmap_norm_scale <- pheatmap(matrix,scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+matrix.log2<-log2(matrix)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_log2 <- pheatmap(matrix.log2, annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_log2_scale <- pheatmap(matrix.log2, scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+matrix.pseudo.log2<-log2(matrix+1)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_pseudo_log2 <- pheatmap(matrix.pseudo.log2, annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+```{r}
+library(pheatmap)
+heathmap_raw_pseudo_log2_scale <- pheatmap(matrix.pseudo.log2,scale="row", annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+#### clustering on samples only (columns) 
+```{r}
+
+heathmap_col_zscore <- pheatmap(matrix.log2,scale = "column", annotation = col_ann_df,annotation_colors = anno_colors, show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+ggsave(heathmap_col_zscore, filename = "/Users/manferg/clip_metanalysis/r-plots/heathmap_col_zscore.png", height = 10, width = 10)
+```
+
+```{r}
+pheatmap(matrix.log2,scale = "column", cutree_rows= 3,annotation = col_ann_df,silent=T) -> heathmap_output
+hc <-heathmap_output$tree_row
+cl <- cutree(hc, 3) # split gene dendrogram in 5 groups
+cl.df<-data.frame(cl)
+
+
+row_ann_df$cluster<-as.factor(cl)
+
+heathmap_col_zscore_cut <- pheatmap(matrix.log2,scale = "column", cutree_rows= 3,annotation_row = row_ann_df,annotation_col= col_ann_df,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+heathmap_col_zscore_cut <- pheatmap(matrix.log2,scale = "column", cutree_rows= 3,annotation_row = row_ann_df,
+                                    annotation_col= col_ann_df,annotation_colors = anno_colors,           show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+
+
+cl3<-cl.df %>% filter(cl==3) %>% rownames_to_column(var = "genes")
+
+dim(cl3)
+mat_cl3<-matrix.log2[cl3$genes,]
+
+
+
+
+heathmap_cl3 <- pheatmap(mat_cl3,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors, show_rownames=T, main = paste("whole dataset"),fontsize = 10)
+
+
+```
+
+
+```{r}
+pheatmap(mat,scale = "column", cutree_rows= 3,annotation = ann_df,silent=T) -> heathmap_output
+hc <-heathmap_output$tree_row
+cl <- cutree(hc, 3) # split gene dendrogram in 5 groups
+cl.df<-data.frame(cl)
+
+
+row_ann_df$cluster<-as.factor(cl)
+
+heathmap_col_zscore_cut <- pheatmap(mat,scale = "column", cutree_rows= 3,annotation_row = row_ann_df,annotation_col= col_ann_df,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+
+cl3<-cl.df %>% filter(cl==2) %>% rownames_to_column(var = "genes")
+
+dim(cl3)
+mat_cl3<-matrix.log2[cl3$genes,]
+
+
+head(mat.clust)
+
+heathmap_cl3 <- pheatmap(mat_cl3,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors, show_rownames=T, main = paste("whole dataset"),fontsize = 10)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+## NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE (NOT ON GENE LENGTH)
+
+LIBRARY SIZE NORMALISATION ONLY 
+NA values removed 
+```{r}
+#HEATH-MAP---------THIS HEATHMAP IS PLOTTED ON LIBRARY SIZE NORM X-LINKS
+xlink.events.chr.lb.norm.df<-left_join(xlink.events.chr.df, df.dedup.out.lib, by = "sample")
+xlink.events.chr.lb.norm.df<-xlink.events.chr.lb.norm.df %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+xlink.events.chr.lb.norm.df.unique<-xlink.events.chr.lb.norm.df %>% group_by(gene_name,sample) %>% summarize(n.norm=sum(n.norm)) %>% arrange( .,desc(n.norm)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+
+
+#merge healthy brain samples 6high and 7 low
+xlink.events.chr.lb.norm.df.unique$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',xlink.events.chr.lb.norm.df.unique$sample)
+xlink.events.chr.lb.norm.df.unique<-aggregate(n.norm ~ sample + gene_name,FUN = "mean", data=xlink.events.chr.lb.norm.df.unique) %>% arrange( .,desc(n.norm))
+
+tidy<-xlink.events.chr.lb.norm.df.unique %>% dplyr::select(sample, gene_name,n.norm) %>% arrange( .,desc(n.norm)) %>% filter( .,gene_name != "None")
+
+ spread.df<-spread(tidy,sample,n.norm)
+ 
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df<-spread.df %>% na.omit() # 888 number of genes post NA omit  
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+#spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+head(spread.df)
+
+
+```
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:16])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(mat), row.names = TRUE)
+```
+
+Heathmap raw x-links
+```{r}
+library(pheatmap)
+mat<-matrix
+heathmap_gnorm <- pheatmap(mat,annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+library(pheatmap)
+heathmap_norm_scale <- pheatmap(mat,scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+matrix.log2<-log2(matrix)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_log2 <- pheatmap(matrix.log2, annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_log2_scale <- pheatmap(matrix.log2, scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+matrix.pseudo.log2<-log2(matrix+1)
+```
+
+```{r}
+library(pheatmap)
+heathmap_norm_pseudo_log2 <- pheatmap(matrix.pseudo.log2, annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+```{r}
+library(pheatmap)
+heathmap_raw_pseudo_log2_scale <- pheatmap(matrix.pseudo.log2,scale="row", annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+# INTRON HEATHMAPS------
+LIBRARY SIZE NORMALISED ONLY
+```{r}
+intron.df<-xlink.events.chr.lb.norm.df %>% filter(region == "intron") #%>% filter( .,grepl("tollervey_brain",sample))
+
+intron.df.unique<-intron.df %>% group_by(gene_name,sample) %>% summarize(n.norm=sum(n.norm)) %>% arrange( .,desc(n.norm)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+
+intron.df.unique$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',intron.df.unique$sample)
+intron.df.unique<-aggregate(n.norm ~ sample + gene_name,FUN = "mean", data=intron.df.unique) %>% arrange( .,desc(n.norm))
+
+
+tidy<-intron.df.unique %>% dplyr::select(sample, gene_name,n.norm) %>% arrange( .,desc(n.norm)) %>% filter( .,gene_name != "None")
+
+spread.df<-spread(tidy,sample,n.norm)
+# 
+# 
+dim(spread.df) # number of genes before NA omit 
+sum(is.na(spread.df)) # NA values
+# 
+spread.df<-spread.df %>% na.omit() # 598 number of genes post NA omit  
+
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:16])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+```
+
+```{r}
+library(pheatmap)
+
+heathmap_norm_scale <- pheatmap(log2(matrix),scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=T, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+```{r}
+library(pheatmap)
+
+heathmap_norm_scale <- pheatmap(log2(matrix),scale="column",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=T, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+```{r}
+pheatmap(log2(matrix),scale = "column", cutree_rows= 6,annotation = col_ann_df,silent=T) -> heathmap_output
+hc <-heathmap_output$tree_row
+cl <- cutree(hc, 6) # split gene dendrogram in 5 groups
+cl.df<-data.frame(cl)
+
+
+row_ann_df$cluster<-as.factor(cl)
+
+heathmap_col_zscore_cut <- pheatmap(log2(matrix),scale = "column", cutree_rows= 6,annotation_row = row_ann_df,annotation_col= col_ann_df,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+heathmap_col_zscore_cut <- pheatmap(log2(matrix),scale = "column", cutree_rows= 6,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+
+
+cl6<-cl.df %>% filter(cl==6) %>% rownames_to_column(var = "genes")
+
+
+mat_cl6<-matrix[cl6$genes,]
+
+
+write.csv(cl6,file="cl6s.csv")
+
+heathmap_cl6 <- pheatmap(mat_cl6,scale ="row",annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors, show_rownames=T, main = paste("whole dataset"),fontsize = 10)
+
+
+
+
+```
+
+# ncRNA HEATHMAPS------
+LIBRARY SIZE NORMALISED ONLY
+```{r}
+ncrna.df<-xlink.events.chr.lb.norm.df %>% filter(region == "ncRNA") %>% filter( .,grepl("tollervey_brain",sample))
+
+ncrna.df.unique<-ncrna.df %>% group_by(gene_name,sample) %>% summarize(n.norm=sum(n.norm)) %>% arrange( .,desc(n.norm)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+
+ncrna.df.unique$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',ncrna.df.unique$sample)
+ncrna.df.unique<-aggregate(n.norm ~ sample + gene_name,FUN = "mean", data=ncrna.df.unique) %>% arrange( .,desc(n.norm))
+
+
+tidy<-ncrna.df.unique %>% dplyr::select(sample, gene_name,n.norm) %>% arrange( .,desc(n.norm)) %>% filter( .,gene_name != "None")
+
+spread.df<-spread(tidy,sample,n.norm)
+# 
+# 
+dim(spread.df) # number of genes before NA omit 
+sum(is.na(spread.df)) # NA values
+# 
+spread.df<-spread.df %>% na.omit() # 598 number of genes post NA omit  
+
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:7])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+```
+
+```{r,fig.width = 10, fig.height = 10}
+library(pheatmap)
+
+heathmap_norm_scale <- pheatmap(matrix,scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=T,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+
+
+# cds HEATHMAPS------
+LIBRARY SIZE NORMALISED ONLY
+```{r}
+
+cds.df<-xlink.events.chr.lb.norm.df %>% filter(region == "cds") #%>% filter( .,grepl("tollervey_brain",sample)) 
+
+cds.df.unique<-cds.df %>% group_by(gene_name,sample) %>% summarize(n.norm=sum(n.norm)) %>% arrange( .,desc(n.norm)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+
+cds.df.unique$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',cds.df.unique$sample)
+cds.df.unique<-aggregate(n.norm ~ sample + gene_name,FUN = "mean", data=cds.df.unique) %>% arrange( .,desc(n.norm))
+
+
+tidy<-cds.df.unique %>% dplyr::select(sample, gene_name,n.norm) %>% arrange( .,desc(n.norm)) %>% filter( .,gene_name != "None")
+
+spread.df<-spread(tidy,sample,n.norm)
+# 
+# 
+dim(spread.df) # number of genes before NA omit 
+sum(is.na(spread.df)) # NA values
+# 
+spread.df<-spread.df %>% na.omit() # 598 number of genes post NA omit  
+
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:16])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+```
+
+```{r,fig.width = 10, fig.height = 10}
+library(pheatmap)
+
+heathmap_norm_scale <- pheatmap(log2(matrix),scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=TRUE, show_rownames=T,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+pheatmap(log2(matrix),scale = "column", cutree_rows= 3,annotation = col_ann_df,silent=T) -> heathmap_output
+hc <-heathmap_output$tree_row
+cl <- cutree(hc, 3) # split gene dendrogram in 5 groups
+cl.df<-data.frame(cl)
+
+
+row_ann_df$cluster<-as.factor(cl)
+
+heathmap_col_zscore_cut <- pheatmap(log2(matrix),scale = "column", cutree_rows= 3,annotation_row = row_ann_df,annotation_col= col_ann_df,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+heathmap_col_zscore_cut <- pheatmap(log2(matrix),scale = "column", cutree_rows= 3,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+
+
+cl3<-cl.df %>% filter(cl==3) %>% rownames_to_column(var = "genes")
+
+dim(cl3)
+mat_cl3<-matrix[cl3$genes,]
+
+
+
+
+heathmap_cl3 <- pheatmap(mat_cl3,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors, show_rownames=T, main = paste("whole dataset"),fontsize = 10)
+
+
+```
+
+
+```{r}
+pheatmap(mat,scale = "column", cutree_rows= 3,annotation = ann_df,silent=T) -> heathmap_output
+hc <-heathmap_output$tree_row
+cl <- cutree(hc, 3) # split gene dendrogram in 5 groups
+cl.df<-data.frame(cl)
+
+
+row_ann_df$cluster<-as.factor(cl)
+
+heathmap_col_zscore_cut <- pheatmap(mat,scale = "column", cutree_rows= 3,annotation_row = row_ann_df,annotation_col= col_ann_df,show_rownames=FALSE, main = paste("whole dataset"),fontsize = 10)
+
+
+cl3<-cl.df %>% filter(cl==2) %>% rownames_to_column(var = "genes")
+
+dim(cl3)
+mat_cl3<-matrix.log2[cl3$genes,]
+
+
+head(mat.clust)
+
+heathmap_cl3 <- pheatmap(mat_cl3,annotation_row = row_ann_df,annotation_col= col_ann_df,annotation_colors = anno_colors, show_rownames=T, main = paste("whole dataset"),fontsize = 10)
+
+
+```
+
+WHOLE DATASET INCLUDING NA
+## 1) NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE
+```{r}
+xlink.events.chr.lb.norm.df<-left_join(xlink.events.chr.df, df.dedup.out.lib, by = "sample")
+xlink.events.chr.lb.norm.df<-xlink.events.chr.lb.norm.df %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+```
+
+```{r}
+
+xlink.events.chr.lb.norm.df.unique<-xlink.events.chr.lb.norm.df %>% group_by(gene_name,sample) %>% summarize(n.norm=sum(n.norm)) %>% arrange( .,desc(n.norm)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+dim(xlink.events.chr.lb.norm.df.unique)
+
+
+```
+
+```{r}
+#merge healthy brain samples 6high and 7 low
+xlink.events.chr.lb.norm.df.unique$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high',xlink.events.chr.lb.norm.df.unique$sample)
+xlink.events.chr.lb.norm.df.unique<-aggregate(n.norm ~ sample + gene_name,FUN = "mean", data=xlink.events.chr.lb.norm.df.unique) %>% arrange( .,desc(n.norm))
+
+```
+
+```{r}
+tidy<-xlink.events.chr.lb.norm.df.unique %>% dplyr::select(sample, gene_name,n.norm) %>% arrange( .,desc(n.norm)) %>% filter( .,gene_name != "None")
+
+```
+
+```{r}
+
+spread.df<-spread(tidy,sample,n.norm)
+
+
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+head(spread.df)
+
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:16])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+```
+
+Log2 Transform 
+```{r}
+
+log2matrix<-log2(matrix + 1)
+
+```
+
+
+Heath-map annotation
+```{r}
+#heathmap annotation-------
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+col_ann_df<-col_ann_df[row.names(col_ann_df) != "tollervey_brain7.low", , drop = FALSE]
+
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+
+```
+
+```{r}
+library(pheatmap)
+
+heathmap_norm_scale <- pheatmap(log2matrix,scale="row",annotation = col_ann_df,annotation_colors = anno_colors,cluster_rows=T, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+```{r}
+
+log2matrix_brain<-log2matrix[,grepl("tollervey_brain", colnames(log2matrix))]
+head(log2matrix_brain)
+
+```
+
+
+```{r}
+#heathmap annotation-------
+#heathmap annotation-------
+col_ann_df = data.frame(metadata$meta_id, metadata$model, row.names = TRUE)
+colnames(col_ann_df)<-c("model")
+col_ann_df.brain<-col_ann_df[grepl("tollervey_brain",rownames(col_ann_df)), , drop = FALSE]
+col_ann_df.brain<-col_ann_df.brain[row.names(col_ann_df.brain) != "tollervey_brain7.low", , drop = FALSE]
+anno_colors = list(mypal.model)
+
+row_ann_df=data.frame(rownames(matrix), row.names = TRUE)
+
+
+```
+
+```{r}
+col.order <-rownames(col_ann_df.brain)
+  
+
+log2matrix_brain<-log2matrix_brain[,col.order]
+head(log2matrix_brain)
+
+#remove 0 values across all samples 
+##Go through each row and determine if a value is zero
+log2matrix_brain<-log2matrix_brain [which(rowSums(log2matrix_brain) > 0), ] 
+
+```
+
+
+
+
+
+```{r}
+library(pheatmap)
+
+
+heathmap_norm_scale <- pheatmap(log2matrix_brain,annotation = col_ann_df.brain, scale="row",cluster_rows=T, show_rownames=FALSE,cluster_cols=TRUE, main = paste("whole dataset"),fontsize = 10)
+```
+
+
+### HEATHMAP INTEGRATION OF FILTERED XLINK DATA TO RNA-SEQ DATA ###
+
+HEALTHY BRAIN ONLY 
+
+```{r}
+score.xlink.df.filt
+
+
+## 1) NORMALISE RAW CROSS-LINKS ON LIBRARY SIZE
+
+lb.norm.df<-left_join(score.xlink.df.filt, df.dedup.out.lib, by = "sample")
+lb.norm.df<-lb.norm.df %>% mutate(ls.factor=count/1e+06) %>% mutate(n.norm = n/ls.factor)
+
+```
+
+## 2) NORMALISE LIBRARY SIZE NORMALISED ON LIBRARY SIZE BY GENE LENGTH (EXTRACT ENRICHED XLINK SITES) 
+```{r}
+norm.df<-lb.norm.df %>% mutate( .,xlink.enrichment=n.norm/length) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame()
+
+```
+
+Filter in only healthy brain samples (exclude brain1)
+
+```{r}
+norm.df.healthy <-norm.df %>% filter(.,sample == "tollervey_brain6.high" | sample == "tollervey_brain7.low" | sample == "tollervey_brain2")
+
+norm.df.ftld<-norm.df %>% filter(.,sample == "tollervey_brain3" | sample == "tollervey_brain4" | sample == "tollervey_brain5")
+
+unique(norm.df$sample)
+```
+
+
+
+Prep data frame for Heathmap 
+
+Healthy
+```{r}
+
+xlink.events.unique.gene.lb.chr.norm.df<-norm.df.healthy %>% group_by(gene_name,sample) %>% summarize(xlink.enrichment=sum(xlink.enrichment)) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+dim(xlink.events.unique.gene.lb.chr.norm.df)
+
+#merge healthy brain samples 6high and 7 low and brain2 
+xlink.events.unique.gene.lb.chr.norm.df$sample<-gsub("tollervey_brain7.low",'tollervey_brain6.high','tollervey_brain2', xlink.events.unique.gene.lb.chr.norm.df$sample)
+xlink.events.unique.gene.lb.chr.norm.df<-aggregate(xlink.enrichment ~ sample + gene_name,FUN = "mean", data=xlink.events.unique.gene.lb.chr.norm.df) %>% arrange( .,desc(xlink.enrichment))
+
+tidy<-xlink.events.unique.gene.lb.chr.norm.df %>% dplyr::select(sample, gene_name,xlink.enrichment) %>% arrange( .,desc(xlink.enrichment)) %>% filter( .,gene_name != "None")
+
+ spread.df<-spread(tidy,sample,xlink.enrichment)
+ 
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df<-spread.df %>% na.omit() # 888 number of genes post NA omit  
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+#spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+head(spread.df)
+
+colnames(spread.df)=c("gene_name","healthy_brain_xlink_enrichment_score")
+
+healthy_brain_xlink_score_df<-arrange(spread.df,desc(healthy_brain_xlink_enrichment_score))
+write.csv(healthy_brain_xlink_score_df,'/Users/manferg/clip_metanalysis/healthy_brain_xlink_score_df.csv')
+```
+
+FTLD
+```{r}
+xlink.events.unique.gene.lb.chr.norm.df<-norm.df.ftld %>% group_by(gene_name,sample) %>% summarize(xlink.enrichment=sum(xlink.enrichment)) %>% arrange( .,desc(xlink.enrichment)) %>% as.data.frame() #total xlinks per gene (sum of all region)
+dim(xlink.events.unique.gene.lb.chr.norm.df)
+
+#merge healthy brain samples 6high and 7 low and brain2 
+xlink.events.unique.gene.lb.chr.norm.df$sample<-gsub("tollervey_brain3", "tollervey_brain4" ,"tollervey_brain5", xlink.events.unique.gene.lb.chr.norm.df$sample)
+xlink.events.unique.gene.lb.chr.norm.df<-aggregate(xlink.enrichment ~ sample + gene_name,FUN = "mean", data=xlink.events.unique.gene.lb.chr.norm.df) %>% arrange( .,desc(xlink.enrichment))
+
+tidy<-xlink.events.unique.gene.lb.chr.norm.df %>% dplyr::select(sample, gene_name,xlink.enrichment) %>% arrange( .,desc(xlink.enrichment)) %>% filter( .,gene_name != "None")
+
+ spread.df<-spread(tidy,sample,xlink.enrichment)
+ 
+dim(spread.df) #35247 number of genes before NA omit 
+sum(is.na(spread.df)) #348683 NA values
+
+spread.df<-spread.df %>% na.omit() # 888 number of genes post NA omit  
+
+genes<-unique(spread.df$gene_name)
+length(genes)
+
+#spread.df[is.na(spread.df)] = 0 #transform NA values into 0 
+
+head(spread.df)
+
+colnames(spread.df)=c("gene_name","ftld_brain_xlink_enrichment_score")
+
+ftld_brain_xlink_score_df<-arrange(spread.df,desc(ftld_brain_xlink_enrichment_score))
+write.csv(ftld_brain_xlink_score_df,'/Users/manferg/clip_metanalysis/ftld_brain_xlink_score_df.csv')
+
+```
+
+
+Create matrix 
+```{r}
+matrix<-as.matrix(spread.df[,2:3])#pheatmap only takes the numeric matrix object as input. So, we need to transfer the numeric part of the data frame to a matrix by removing the first 5 columns of categorical data.
+rownames(matrix)<-as.character(spread.df$gene_name)
+
+```
+
+
