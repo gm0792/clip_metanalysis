@@ -191,7 +191,7 @@ grot.dedup.ratio.df<-left_join(grot.dedup.input.df,grot.dedup.output.df) %>% mut
 
 grot.dedup.ratio.df<-grot.dedup.ratio.df[match(grot.sample.order, grot.dedup.ratio.df$sample),]
 grot.dedup.ratio.df$sample <- factor(grot.dedup.ratio.df$sample,levels = grot.sample.order)
-grot.dedup.radio.tidy<-melt(grot.dedup.ratio.df, variable.name = "read", value.name = "count")
+grot.dedup.ratio.tidy<-melt(grot.dedup.ratio.df, variable.name = "read", value.name = "count")
 
 #merging tidy df from different datasets-----------------------------
 
@@ -199,7 +199,7 @@ grot.dedup.radio.tidy<-melt(grot.dedup.ratio.df, variable.name = "read", value.n
 df.dedup.in.out<-dplyr::bind_rows(tollervey.dedup.tidy,grot.dedup.tidy) 
 
 #reads ratio df
-df.dedup.ratio<-dplyr::bind_rows(tollervey.dedup.radio.tidy,grot.dedup.radio.tidy)
+df.dedup.ratio<-dplyr::bind_rows(tollervey.dedup.radio.tidy,grot.dedup.ratio.tidy)
 
 
 ```
@@ -919,7 +919,7 @@ scatter
   
 df2= score.xlink.df.filt %>% filter(sample == "grot_293fl_1")
   
-df3= df2 %>% filter(score >10 | n > 10 )
+sub.res.df2= df2 %>% filter(score >10 | n > 10 )
 
 df2= df2%>% column_to_rownames("gene_name")
 m <- lm(n ~ score, df2)
@@ -929,8 +929,9 @@ aug<-augment(m)
 aug$.std.resid->df2$st.resid
 df2= df2 %>% arrange(desc(st.resid))
   
-sub.res.df2<-df2 %>% filter(st.resid <= -5 | st.resid >= 0.5 |log2(score) < 3 | log2(n) < 3 ) 
-  
+#sub.res.df2<-df2 %>% filter(st.resid <= -5 | st.resid >= 0.5 |log2(score) < 3 | log2(n) < 3 ) 
+sub.res.df2<-df2 %>% filter(st.resid <= -5 )
+    
   
   geom_text_repel(data          = subset(df, log2(score) > 5),
                   nudge_y       = 32 - subset(df, log2(score) > 5)$df,
